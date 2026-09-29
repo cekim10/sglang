@@ -129,7 +129,7 @@ def recon():
     rec("watchdog_fire_msg", wd, r'(f?"[^"\n]*watchdog timeout[^"\n]*")')
     rec("watchdog_post_fire_sleep", wd, r"time\.sleep\((\d+)\)\s*\n\s*self\.parent_process\.send_signal\(signal\.SIGQUIT\)", "sleep before SIGQUIT to parent")
     rec("subprocess_watchdog_interval", wd, r"class SubprocessWatchdog.*?interval:\s*float\s*=\s*([\d.]+)", "rank-death poll period")
-    rec("subprocess_watchdog_msg", wd, r'(f?"Subprocess[^"\n]*crashed[^"\n]*")')
+    rec("subprocess_watchdog_msg", wd, r'(f?"Subprocess \{name\}[^"\n]*crashed[^"\n]*")', "logged by the HTTP-server process when a rank exits non-zero")
 
     http = _find(srt, ["entrypoints/http_server.py"])
     rec("health_check_timeout", http, r'HEALTH_CHECK_TIMEOUT\s*=\s*int\(os\.getenv\("SGLANG_HEALTH_CHECK_TIMEOUT",\s*(\d+)\)\)', "/health and /health_generate 503 after this many s without any engine output")
