@@ -147,7 +147,12 @@ def recon():
     rec("get_next_batch_to_run_def", sched, r"(def get_next_batch_to_run\()")
     rec("forward_ct_increment", sched, r"(self\.forward_ct\s*\+=\s*1)")
 
+    envf = _find(srt, ["environ.py"])
+    rec("crash_pyspy_dump_default", envf, r"SGLANG_PYSPY_DUMP_BEFORE_CRASH\s*=\s*EnvBool\((\w+)\)", "SIGQUIT handler runs py-spy on schedulers before killing the tree")
+    rec("crash_cuda_coredump_default", envf, r"SGLANG_CUDA_COREDUMP_BEFORE_CRASH\s*=\s*EnvBool\((\w+)\)", "SIGQUIT handler waits for CUDA coredumps before killing the tree")
+    rec("crash_cuda_coredump_wait_s", envf, r"SGLANG_CUDA_COREDUMP_BEFORE_CRASH_WAIT_SECS\s*=\s*Env\w+\(([\d.]+)\)", "seconds the handler sleeps even when no coredump is enabled")
     tm = _find(srt, ["managers/tokenizer_manager.py"])
+    rec("crash_handler_settle_sleep", tm, r'"Sleeping (\d+) seconds before crash diagnostics', "unconditional sleep at the top of the crash-dump path")
     rec("sigquit_handler_msg", tm, r'(f?"SIGQUIT received[^"\n]*")')
 
     out["findings"] = findings

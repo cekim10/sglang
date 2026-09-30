@@ -123,6 +123,24 @@ def analyze_injection(run: Path, inj: dict, reqs: list, probe: list, gap_s: floa
                       and r.get("state") != "200" and pre_lo <= r["t_ns"] < t_inj]
     pre_gen1_bad = [r for r in probe if r.get("ev") == "probe" and r.get("kind") == "gen1"
                     and r.get("state") != "200" and pre_lo <= r["t_ns"] < t_inj]
+    def health_with_client_timeout(x_s: float):
+        """When a health checker with an x-second client timeout would first have flagged the replica."""
+        best = None
+        for r in probe:
+            if r.get("ev") not in ("probe", "probe_sustained", "heartbeat") or r.get("kind") not in ("health", "health_generate"):
+                continue
+            if r["t_ns"] < t_inj:
+                continue
+            cand = None
+            if r.get("state") != "200":
+                cand = r["t_ns"]
+            if r.get("latency_ms") is not None and r["latency_ms"] > x_s * 1e3 and r.get("t_sent_ns"):
+                cand = min(cand or 1 << 62, r["t_sent_ns"] + int(x_s * NS))
+            if cand is not None and cand >= t_inj and (best is None or cand < best):
+                best = cand
+        return best
+
+    t_health_ct5 = health_with_client_timeout(5.0)
     t_health, health_state = first_probe({"health", "health_generate"})
     t_gen1, gen1_state = first_probe({"gen1"})
     t_gen1_3, _ = first_probe({"gen1"}, sustained=3)
@@ -162,6 +180,7 @@ def analyze_injection(run: Path, inj: dict, reqs: list, probe: list, gap_s: floa
         "engine_detector": eng_who,
         "t_detect_health": _s(t_health, t_inj),
         "health_state": health_state,
+        "t_detect_health_if_5s_client_timeout": _s(t_health_ct5, t_inj),
         "t_detect_gen1": _s(t_gen1, t_inj),
         "t_detect_gen1_sustained3": _s(t_gen1_3, t_inj),
         "t_server_dead": _s(t_server_dead, t_inj),
