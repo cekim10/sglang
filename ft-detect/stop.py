@@ -28,6 +28,27 @@ def _proc(pid):
         return None
 
 
+def _gone(p) -> bool:
+    try:
+        return (not p.is_running()) or p.status() == psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return True
+    except psutil.Error:
+        return False
+
+
+def _wait(procs, timeout: float):
+    """Poll-based replacement for psutil.wait_procs (pidfd_open raises EINVAL on some kernels)."""
+    deadline = time.monotonic() + timeout
+    alive = list(procs)
+    while alive and time.monotonic() < deadline:
+        alive = [p for p in alive if not _gone(p)]
+        if alive:
+            time.sleep(0.2)
+    gone = [p for p in procs if p not in alive]
+    return gone, alive
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--graceful", action="store_true")
@@ -74,7 +95,7 @@ def main() -> int:
     if args.graceful and server is not None and server.is_running():
         server.send_signal(signal.SIGTERM)
         ev.write({"ev": "sigterm", "pid": server.pid})
-        gone, alive = psutil.wait_procs(targets, timeout=args.wait)
+        gone, alive = _wait(targets, timeout=args.wait)
         targets = alive
 
     for p in targets:
@@ -83,7 +104,7 @@ def main() -> int:
             ev.write({"ev": "sigkill", "pid": p.pid})
         except psutil.NoSuchProcess:
             pass
-    gone, alive = psutil.wait_procs(targets, timeout=args.wait)
+    gone, alive = _wait(targets, timeout=args.wait)
     for p in alive:
         print(f"still alive after SIGKILL: {p.pid} {p.status()}", file=sys.stderr)
     ev.write({"ev": "stopped", "killed": [p.pid for p in gone], "alive": [p.pid for p in alive]})
