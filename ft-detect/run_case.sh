@@ -13,6 +13,10 @@
 #                     stock watchdog fires at 300-450 s, torch NCCL default is 600 s)
 #   POST_GRACE        max s to keep observing after detection, waiting for SGLang to tear the
 #                     replica down on its own (default 300; stops early once http_server is dead)
+#   INJECT_JITTER     extra random 0..N s wait before injecting (default 0). The scheduler
+#                     watchdog polls every timeout/2, so a fixed launch-to-inject schedule
+#                     samples the same poll phase every run; jitter spreads runs over the
+#                     whole 1.0x-1.5x timeout window.
 #   PYTHON            interpreter
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -24,8 +28,9 @@ MIN_WARMUP=${MIN_WARMUP:-90}
 STEADY_WAIT=${STEADY_WAIT:-600}
 MAX_DETECT_WAIT=${MAX_DETECT_WAIT:-900}
 POST_GRACE=${POST_GRACE:-300}
+INJECT_JITTER=${INJECT_JITTER:-0}
 PYTHON=${PYTHON:-python}
-LOAD_DURATION=$(( MIN_WARMUP + STEADY_WAIT + MAX_DETECT_WAIT + POST_GRACE + 120 ))
+LOAD_DURATION=$(( MIN_WARMUP + STEADY_WAIT + INJECT_JITTER + MAX_DETECT_WAIT + POST_GRACE + 120 ))
 mkdir -p "$RUNS_DIR" "$HERE/results"
 
 DETECT_RE='"pattern":"(watchdog_fire|scheduler_exception|subprocess_crashed|sigquit|kill_tree|nccl_timeout|nccl_error|abort|torch_dist_error|cuda_error|scheduler_terminated)"|"who":"http_server","pid":[0-9]+,"state":"(dead|zombie)"'
@@ -62,6 +67,9 @@ for i in $(seq 1 "$N"); do
     touch "$RUN/not_steady"
   fi
 
+  if [ "$INJECT_JITTER" -gt 0 ]; then
+    j=$(( RANDOM % (INJECT_JITTER + 1) )); echo "[run_case] jitter: waiting ${j}s before injection"; echo "$j" > "$RUN/inject_jitter_s"; sleep "$j"
+  fi
   n_before=$(wc -l < "$RUN/probe.jsonl" 2>/dev/null || echo 0)
   "$PYTHON" "$HERE/inject.py" --case "$CASE" --rank "$RANK" --run-id "$(basename "$RUN")" || { echo "[run_case] inject failed"; cleanup_run; continue; }
 
