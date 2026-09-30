@@ -118,6 +118,10 @@ class PidWatch:
                 st = p.status()
                 if st == psutil.STATUS_ZOMBIE:
                     st = "zombie"
+                elif st in (psutil.STATUS_STOPPED, psutil.STATUS_TRACING_STOP):
+                    st = "stopped"
+                else:
+                    st = "alive"  # running/sleeping/disk-sleep flap every tick; not a state change we care about
             except psutil.NoSuchProcess:
                 st = "dead"
             except psutil.AccessDenied:

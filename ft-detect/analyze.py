@@ -104,7 +104,7 @@ def analyze_injection(run: Path, inj: dict, reqs: list, probe: list, gap_s: floa
     eng.sort()
     t_eng, eng_who = (eng[0] if eng else (None, None))
     t_server_dead = next((r["t_ns"] for r in probe if r.get("ev") == "pid" and r.get("who") == "http_server"
-                          and r.get("state") == "dead" and r["t_ns"] >= t_inj), None)
+                          and r.get("state") in ("dead", "zombie") and r["t_ns"] >= t_inj), None)
     t_target_seen = next((r["t_ns"] for r in probe if r.get("ev") == "pid" and r.get("who") == target_name
                           and r["t_ns"] >= t_inj), None)
 
