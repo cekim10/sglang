@@ -11,7 +11,8 @@
 #   STEADY_WAIT       max s to wait for steady state (default 600)
 #   MAX_DETECT_WAIT   max s to wait for an engine-side detection after injection (default 900;
 #                     stock watchdog fires at 300-450 s, torch NCCL default is 600 s)
-#   POST_GRACE        s to keep observing after detection (default 30)
+#   POST_GRACE        max s to keep observing after detection, waiting for SGLang to tear the
+#                     replica down on its own (default 300; stops early once http_server is dead)
 #   PYTHON            interpreter
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -22,7 +23,7 @@ RUNS_DIR=${RUNS_DIR:-$HERE/runs}
 MIN_WARMUP=${MIN_WARMUP:-90}
 STEADY_WAIT=${STEADY_WAIT:-600}
 MAX_DETECT_WAIT=${MAX_DETECT_WAIT:-900}
-POST_GRACE=${POST_GRACE:-30}
+POST_GRACE=${POST_GRACE:-300}
 PYTHON=${PYTHON:-python}
 LOAD_DURATION=$(( MIN_WARMUP + STEADY_WAIT + MAX_DETECT_WAIT + POST_GRACE + 120 ))
 mkdir -p "$RUNS_DIR" "$HERE/results"
@@ -72,7 +73,16 @@ for i in $(seq 1 "$N"); do
     sleep 1
   done
   [ "$detected" = 1 ] || { echo "[run_case] no engine-side detection within ${MAX_DETECT_WAIT}s"; touch "$RUN/no_engine_detect"; }
-  sleep "$POST_GRACE"
+  # Keep observing until SGLang itself tears the replica down (http_server dead), or POST_GRACE.
+  SERVER_PID=$("$PYTHON" -c "import json;print(json.load(open('$RUN/pids.json'))['http_server'])" 2>/dev/null || echo 0)
+  t1=$(date +%s); torn=0
+  while [ $(( $(date +%s) - t1 )) -lt "$POST_GRACE" ]; do
+    if ! kill -0 "$SERVER_PID" 2>/dev/null || [ "$(ps -o stat= -p "$SERVER_PID" 2>/dev/null | cut -c1)" = "Z" ]; then
+      torn=1; echo "[run_case] replica torn down by SGLang $(( $(date +%s) - t0 )) s after injection"; sleep 5; break
+    fi
+    sleep 1
+  done
+  [ "$torn" = 1 ] || { echo "[run_case] SGLang did not tear the replica down within ${POST_GRACE}s after detection; stopping it ourselves"; touch "$RUN/no_self_teardown"; }
 
   cleanup_run
   "$PYTHON" "$HERE/analyze.py" "$RUN" --csv "$HERE/results/case${CASE}.csv" --md "$HERE/results/case${CASE}.md" || true

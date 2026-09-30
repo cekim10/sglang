@@ -118,6 +118,11 @@ def analyze_injection(run: Path, inj: dict, reqs: list, probe: list, gap_s: floa
                 return r["t_ns"], r["state"]
         return None, None
 
+    pre_lo = t_inj - 300 * NS
+    pre_health_bad = [r for r in probe if r.get("ev") == "probe" and r.get("kind") in ("health", "health_generate")
+                      and r.get("state") != "200" and pre_lo <= r["t_ns"] < t_inj]
+    pre_gen1_bad = [r for r in probe if r.get("ev") == "probe" and r.get("kind") == "gen1"
+                    and r.get("state") != "200" and pre_lo <= r["t_ns"] < t_inj]
     t_health, health_state = first_probe({"health", "health_generate"})
     t_gen1, gen1_state = first_probe({"gen1"})
     t_gen1_3, _ = first_probe({"gen1"}, sustained=3)
@@ -160,6 +165,8 @@ def analyze_injection(run: Path, inj: dict, reqs: list, probe: list, gap_s: floa
         "t_detect_gen1": _s(t_gen1, t_inj),
         "t_detect_gen1_sustained3": _s(t_gen1_3, t_inj),
         "t_server_dead": _s(t_server_dead, t_inj),
+        "n_health_false_pos_5min_before": len(pre_health_bad),
+        "n_gen1_false_pos_5min_before": len(pre_gen1_bad),
         "window_end": _s(t_end, t_inj),
         "n_inflight_hung": len(inflight),
         "n_new_sent": len(new_all),
@@ -232,6 +239,7 @@ def analyze_run(run: Path, gap_s: float) -> dict:
     row["launch_failed"] = (run / "launch_failed").exists()
     row["not_steady"] = (run / "not_steady").exists()
     row["no_engine_detect"] = (run / "no_engine_detect").exists()
+    row["no_self_teardown"] = (run / "no_self_teardown").exists()
     if row["launch_failed"]:
         row["spurious_kill"] = True
     return row

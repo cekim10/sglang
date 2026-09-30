@@ -42,7 +42,9 @@ PATTERNS = {
     "nccl_timeout": re.compile(r"Watchdog caught collective operation timeout|ProcessGroupNCCL.*(timeout|Timed out)|NCCL timeout", re.I),
     "nccl_error": re.compile(r"ncclSystemError|ncclRemoteError|ncclInternalError|ncclUnhandledCudaError|NCCL error", re.I),
     "torch_dist_error": re.compile(r"torch\.distributed\.DistBackendError|DistNetworkError|Connection reset by peer|Broken pipe"),
-    "abort": re.compile(r"\babort(ed)?\b|std::terminate|Aborted \(core dumped\)|SIGABRT", re.I),
+    # NOTE: "Abort request obj.rid=..." is the server logging a *client* disconnect; excluded on purpose.
+    "abort": re.compile(r"std::terminate|Aborted \(core dumped\)|SIGABRT|ncclCommAbort|\baborted\b(?! request)|\babort(?!(ed)? request)\b", re.I),
+    "client_disconnect": re.compile(r"Abort request obj\.rid=|disconnected from the client side"),
     "cuda_error": re.compile(r"CUDA error|illegal memory access|device-side assert", re.I),
     "scheduler_terminated": re.compile(r"terminated with"),
     "server_shutdown": re.compile(r"Shutting down|Draining requests and shutting down", re.I),
