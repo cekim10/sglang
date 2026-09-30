@@ -48,6 +48,8 @@ def worker(rank: int, world: int, port: int, timeout_s: int):
     torch.cuda.synchronize()
     say(f"done, {(time.time() - t1) / 10 * 1e3:.1f} ms per 64 MB all_reduce")
     dist.destroy_process_group()
+    sys.stdout.flush()
+    os._exit(0)  # do not wait on NCCL/CUDA teardown; the measurement is done
 
 
 def main():
