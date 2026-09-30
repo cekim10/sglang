@@ -36,8 +36,14 @@ def main() -> int:
 
     pids = load_pids()
     if pids is None:
-        print(f"no pids.json in {run_dir()}; nothing to stop", file=sys.stderr)
-        return 0
+        # Startup never reached readiness: fall back to the shell-recorded server PID.
+        spid = run_dir() / "pids" / "server.pid"
+        if spid.exists() and _proc(spid.read_text().strip()) is not None:
+            pids = {"http_server": int(spid.read_text().strip()), "ranks": {}, "detokenizer": None}
+            print(f"no pids.json; falling back to server.pid {pids['http_server']} and its children", file=sys.stderr)
+        else:
+            print(f"no pids.json or live server.pid in {run_dir()}; nothing to stop", file=sys.stderr)
+            return 0
     ev = JsonlWriter(run_dir() / "inject.jsonl")
 
     targets = []
@@ -83,6 +89,10 @@ def main() -> int:
     ev.write({"ev": "stopped", "killed": [p.pid for p in gone], "alive": [p.pid for p in alive]})
     try:
         os.rename(run_dir() / "pids.json", run_dir() / "pids.stopped.json")
+    except OSError:
+        pass
+    try:
+        os.rename(run_dir() / "pids" / "server.pid", run_dir() / "pids" / "server.pid.stopped")
     except OSError:
         pass
     time.sleep(1)

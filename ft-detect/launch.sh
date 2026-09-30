@@ -54,6 +54,7 @@ while true; do
   if ! kill -0 "$SERVER_PID" 2>/dev/null; then
     echo "[launch] server process exited during startup; tail of log:" >&2
     tail -n 40 "$RUN_DIR/logs/server.log" >&2
+    "$PYTHON" "$HERE/stop.py" >/dev/null 2>&1 || true   # reap any orphaned rank processes
     exit 1
   fi
   code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "http://127.0.0.1:$PORT/health" || true)
@@ -61,7 +62,10 @@ while true; do
     break
   fi
   if [ $(( $(date +%s) - t0 )) -ge "$READY_TIMEOUT" ]; then
-    echo "[launch] timed out waiting for readiness (last /health=$code)" >&2
+    echo "[launch] timed out waiting for readiness (last /health=$code); tail of log:" >&2
+    tail -n 40 "$RUN_DIR/logs/server.log" >&2
+    echo "[launch] killing the unready server tree (pid $SERVER_PID)" >&2
+    "$PYTHON" "$HERE/stop.py" || true
     exit 1
   fi
   sleep 2
