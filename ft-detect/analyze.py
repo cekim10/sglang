@@ -31,6 +31,8 @@ from common import read_jsonl  # noqa: E402
 ENGINE_PATTERNS = {
     "watchdog_fire", "scheduler_exception", "subprocess_crashed", "sigquit", "kill_tree",
     "nccl_timeout", "nccl_error", "torch_dist_error", "abort", "cuda_error", "scheduler_terminated",
+    # sglang.multimodal_gen (diffusion)
+    "diff_recv_error", "diff_exec_error", "diff_max_errors", "diff_worker_dead", "diff_worker_shutdown", "diff_ipc_a2a_timeout",
 }
 NS = 1e9
 
@@ -109,10 +111,12 @@ def analyze_injection(run: Path, inj: dict, reqs: list, probe: list, gap_s: floa
                           and r["t_ns"] >= t_inj), None)
 
     def first_probe(kinds, sustained=None):
+        # 'probe' = state change; 'probe_bad' = a repeated bad result (the probe was already
+        # failing, e.g. a generation probe stuck in the queue before injection)
         for r in probe:
             if r["t_ns"] < t_inj or r.get("kind") not in kinds:
                 continue
-            if sustained is None and r.get("ev") == "probe" and r.get("state") != "200":
+            if sustained is None and r.get("ev") in ("probe", "probe_bad") and r.get("state") != "200":
                 return r["t_ns"], r["state"]
             if sustained is not None and r.get("consecutive_bad", 0) >= sustained and r.get("state") != "200":
                 return r["t_ns"], r["state"]
@@ -247,6 +251,8 @@ def analyze_run(run: Path, gap_s: float) -> dict:
         "tp": env.get("tp"),
         "watchdog_timeout": env.get("watchdog_timeout"),
         "dist_timeout": env.get("dist_timeout"),
+        "rpc_timeout": env.get("rpc_timeout"),
+        "stack": env.get("stack", "sglang"),
         "profile": loads[0].get("profile") if loads else None,
         "rate": loads[0].get("rate") if loads else None,
     }

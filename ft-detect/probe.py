@@ -48,6 +48,13 @@ PATTERNS = {
     "cuda_error": re.compile(r"CUDA error|illegal memory access|device-side assert", re.I),
     "scheduler_terminated": re.compile(r"terminated with"),
     "server_shutdown": re.compile(r"Shutting down|Draining requests and shutting down", re.I),
+    # sglang.multimodal_gen (diffusion) strings, from recon_diff.py
+    "diff_recv_error": re.compile(r"Error receiving requests in scheduler event loop"),
+    "diff_exec_error": re.compile(r"Error executing request in scheduler event loop"),
+    "diff_max_errors": re.compile(r"Maximum consecutive errors|Scheduler terminated after"),
+    "diff_worker_dead": re.compile(r"scheduler is dead|Worker process\(es\) did not|Exit code:"),
+    "diff_worker_shutdown": re.compile(r"Worker \d+: Shutdown complete"),
+    "diff_ipc_a2a_timeout": re.compile(r"IPC_A2A|ipc_a2a|IPC a2a|all-to-all.*timed out|a2a.*timeout", re.I),
 }
 MAX_HITS_PER_KEY = 5
 
@@ -150,7 +157,15 @@ class HttpProbe:
         url = base_url().rstrip("/")
         t0 = now_ns()
         try:
-            if self.kind == "gen1":
+            if self.kind == "gen1" and os.environ.get("FT_API") == "diffusion":
+                # smallest legal image request: 1 denoising step at 256x256
+                r = await self.client.post(
+                    url + "/v1/images/generations",
+                    json={"prompt": "probe", "width": 256, "height": 256, "n": 1, "num_inference_steps": 1,
+                          "seed": 0, "response_format": "b64_json"},
+                    timeout=self.timeout,
+                )
+            elif self.kind == "gen1":
                 r = await self.client.post(
                     url + "/generate",
                     json={"input_ids": [1000], "sampling_params": {"max_new_tokens": 1, "ignore_eos": True}},
@@ -175,8 +190,11 @@ class HttpProbe:
                             "t_sent_ns": t0, "latency_ms": self.last_latency_ms, "n": self.n,
                             "consecutive_bad": self.consecutive_bad})
             self.state = st
-        elif bad and self.consecutive_bad in (3, 10):
-            self.out.write({"ev": "probe_sustained", "kind": self.kind, "state": st, "t_sent_ns": t0,
+        elif bad:
+            # repeated failure without a state change: still one record per result so that a
+            # probe that was already failing before an injection is visible after it
+            self.out.write({"ev": "probe_sustained" if self.consecutive_bad in (3, 10) else "probe_bad",
+                            "kind": self.kind, "state": st, "t_sent_ns": t0,
                             "latency_ms": self.last_latency_ms, "consecutive_bad": self.consecutive_bad})
 
     def kick(self):
@@ -203,6 +221,8 @@ async def amain(a):
             HttpProbe("health_generate", out, client, a.health_timeout),
             HttpProbe("gen1", out, client, a.gen_timeout),
         ]
+        if os.environ.get("FT_API") == "diffusion":
+            probes.append(HttpProbe("liveness", out, client, a.health_timeout))
         pidw = PidWatch(out)
         tail = LogTailer(out)
         t_start = now_ns()
