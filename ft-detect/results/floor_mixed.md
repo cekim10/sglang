@@ -1,0 +1,21 @@
+## Per run
+
+| run | model | tp | watchdog_timeout | dist_timeout | profile | rate | mode | duration_s | n_requests | n_errors | error_kinds | ttft_p50_ms | ttft_p99_ms | spurious_kill | first_engine_event | first_pid_death | health_non200_changes | gen1_non200_changes | gen1_max_consecutive_bad | launch_failed | not_steady | no_engine_detect | no_self_teardown |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| floor_mixed_together_T300_20261001-150902 | Qwen/Qwen3-14B | 2 | 300 | 300 | mixed | 0.96 | floor | 1212.208 | 1191 | 0 |  | 545.9 | 8585.2 | False |  |  | 0 | 16 | 3 | False | False | False | False |
+| floor_mixed_together_T60_20261001-153022 | Qwen/Qwen3-14B | 2 | 60 | 60 | mixed | 0.96 | floor | 1207.528 | 1186 | 0 |  | 509.3 | 8392.8 | False |  |  | 0 | 14 | 3 | False | False | False | False |
+| floor_mixed_together_T30_20261001-155138 | Qwen/Qwen3-14B | 2 | 30 | 30 | mixed | 0.96 | floor | 1207.491 | 1186 | 0 |  | 512.1 | 8405.5 | False |  |  | 0 | 14 | 3 | False | False | False | False |
+| floor_mixed_together_T10_20261001-161253 | Qwen/Qwen3-14B | 2 | 10 | 10 | mixed | 0.96 | floor | 1212.193 | 1191 | 0 |  | 545.5 | 8587.6 | False |  |  | 0 | 17 | 3 | False | False | False | False |
+| floor_mixed_together_T5_20261001-163413 | Qwen/Qwen3-14B | 2 | 5 | 5 | mixed | 0.96 | floor | 1207.494 | 1186 | 0 |  | 503.6 | 8426.4 | False |  |  | 0 | 13 | 3 | False | False | False | False |
+| floor_mixed_together_T2_20261001-165528 | Qwen/Qwen3-14B | 2 | 2 | 2 | mixed | 0.96 | floor | 1207.551 | 1186 | 0 |  | 504.8 | 8440.6 | False |  |  | 0 | 13 | 3 | False | False | False | False |
+
+### Timeout floor sweep (spurious kills per setting)
+
+| profile | watchdog_timeout | dist_timeout | runs | spurious | errors | ttft_p99_ms |
+|---|---|---|---|---|---|---|
+| mixed | 5 | 5 | 1 | 0 | 0 | 8426.4 |
+| mixed | 10 | 10 | 1 | 0 | 0 | 8587.6 |
+| mixed | 30 | 30 | 1 | 0 | 0 | 8405.5 |
+| mixed | 60 | 60 | 1 | 0 | 0 | 8392.8 |
+| mixed | 300 | 300 | 1 | 0 | 0 | 8585.2 |
+| mixed | 2 | 2 | 1 | 0 | 0 | 8440.6 |
