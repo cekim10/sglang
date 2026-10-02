@@ -288,8 +288,10 @@ def aggregate_md(df: pd.DataFrame) -> str:
                     n_new_errored_med=("n_new_errored", "median")).reset_index()
         out.append("### T_detect per case (seconds after t_inject, median over runs)\n\n" + to_markdown(agg.round(2)))
     if (df["mode"] == "floor").any():
-        d = df[df["mode"] == "floor"]
-        g = d.groupby(["profile", "watchdog_timeout", "dist_timeout"], dropna=False)
+        d = df[df["mode"] == "floor"].copy()
+        for c in ("watchdog_timeout", "dist_timeout", "rate"):
+            d[c] = d[c].astype(str)   # CSV round-trips mix int/str; group on a stable key
+        g = d.groupby(["profile", "rate", "watchdog_timeout", "dist_timeout"], dropna=False)
         agg = g.agg(runs=("run", "count"), spurious=("spurious_kill", "sum"),
                     errors=("n_errors", "sum"), ttft_p99_ms=("ttft_p99_ms", "max")).reset_index()
         out.append("### Timeout floor sweep (spurious kills per setting)\n\n" + to_markdown(agg))

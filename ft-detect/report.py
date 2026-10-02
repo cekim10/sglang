@@ -112,7 +112,11 @@ def main():
     floor_h, per_h = floor_value(fh)
     for name, df, fl, per in (("mixed", fm, floor_m, per_m), ("harsh (30% 32k prefill + 3x bursts)", fh, floor_h, per_h)):
         L.append(f"### {name}\n")
-        L.append(md_table(df, ["run", "watchdog_timeout", "dist_timeout", "duration_s", "n_requests", "n_errors", "ttft_p50_ms", "ttft_p99_ms",
+        if not df.empty and df["rate"].nunique() > 1:
+            L.append("Rows at different `rate` values are separate experiments: a rate above the profile's own 70% "
+                     "point is an overload run (TTFT in the hundreds of seconds, request errors), kept because it "
+                     "shows the watchdog's behaviour under overload, not as a 'realistic load' measurement.\n")
+        L.append(md_table(df, ["run", "rate", "watchdog_timeout", "dist_timeout", "duration_s", "n_requests", "n_errors", "ttft_p50_ms", "ttft_p99_ms",
                                "spurious_kill", "first_engine_event", "first_pid_death", "health_non200_changes", "gen1_max_consecutive_bad", "launch_failed"]))
         L.append(f"\nSmallest clean setting: **{fl}** s\n")
     floor_both = None if floor_m is None or floor_h is None else max(floor_m, floor_h)
