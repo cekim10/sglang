@@ -75,7 +75,11 @@ def main():
     inj = pd.concat([caseA, caseB], ignore_index=True) if not (caseA.empty and caseB.empty) else pd.DataFrame()
 
     L = []
-    L.append("# Failure-detection latency kill test — Phase 1 (SGLang, TP=4)\n")
+    tp = None
+    for d in (inj, fm, fh):
+        if not d.empty and "tp" in d:
+            tp = int(d["tp"].dropna().iloc[0]); break
+    L.append(f"# Failure-detection latency kill test — Phase 1 (SGLang, TP={tp if tp else '?'})\n")
     L.append("## 1. Stack\n")
     L.append(f"- SGLang version: `{rc.get('sglang_version')}` at `{rc.get('sglang_path')}`; git commit: `{rc.get('sglang_git_commit')}`")
     L.append(f"- torch `{rc.get('torch_version')}`, NCCL `{rc.get('nccl_version')}`, python `{rc.get('python')}`")
@@ -87,7 +91,7 @@ def main():
             for k, v in (rc.get("findings") or {}).items()]
     L.append(md_table(pd.DataFrame(rows)) + "\n")
     L.append("Interpretation (from the Step 0 code read):\n"
-             "- The scheduler watchdog counts `forward_ct`, polls every `timeout/2`, so a hang is noticed 1.0x-1.5x the timeout after the last step, then sleeps 5 s and SIGQUITs the parent, which kills the whole tree. Detection == replica death; there is no 'unhealthy' state.\n"
+             "- The scheduler watchdog counts `forward_ct`, polls every `timeout/2`, so a hang is noticed 1.0x-1.5x the timeout after the last step, then sleeps 5 s and SIGQUITs the parent. The parent's SIGQUIT handler sleeps 5 s, runs py-spy, waits `SGLANG_CUDA_COREDUMP_BEFORE_CRASH_WAIT_SECS` (60 s, even when coredumps are not enabled) and only then kills the tree. The handler is synchronous in the main thread, so the HTTP event loop is frozen while it runs. The watchdog path has no 'unhealthy' state of its own; the only such state is set by `/health` after 20 s of silence, and nothing in the engine acts on it.\n"
              "- A dead rank (non-zero exit code) is noticed by `SubprocessWatchdog` polling every 1 s in the HTTP-server process; a SIGSTOPped rank still counts as alive.\n"
              "- `/health` and `/health_generate` share one handler: 200 as soon as *any* engine output arrives, 503 after `SGLANG_HEALTH_CHECK_TIMEOUT` (20 s) of silence.\n"
              "- `--dist-timeout` defaults to None (torch default). TP all-reduce under load goes through custom all-reduce / pynccl, which torch's NCCL watchdog does not cover; the gloo CPU group for the per-step request broadcast has a hard-coded 2 h timeout.\n")
@@ -103,9 +107,16 @@ def main():
         g = inj.groupby(["case", "watchdog_timeout"], dropna=False).agg(
             runs=("run", "count"),
             engine_med=("t_detect_engine", "median"), engine_min=("t_detect_engine", "min"), engine_max=("t_detect_engine", "max"),
-            health_med=("t_detect_health", "median"), gen1_med=("t_detect_gen1", "median"),
+            health_med=("t_detect_health", "median"),
+            health_5s_client_med=("t_detect_health_if_5s_client_timeout", "median"),
+            gen1_med=("t_detect_gen1", "median"),
+            teardown_med=("t_server_dead", "median"), teardown_min=("t_server_dead", "min"), teardown_max=("t_server_dead", "max"),
             hung_med=("n_inflight_hung", "median"), new_err_med=("n_new_errored", "median")).reset_index().round(2)
-        L.append("Median over runs:\n\n" + md_table(g) + "\n")
+        L.append("Median over runs (`teardown` = HTTP server process gone, i.e. the replica actually left service):\n\n" + md_table(g) + "\n")
+        L.append("Column meanings: `engine` = first detector string in any log or death of a non-injected process; "
+                 "`health` = first non-200 from /health or /health_generate with the probe's 60 s client timeout; "
+                 "`health_5s_client` = when a checker with a 5 s client timeout would first have flagged it (derived from the same probes); "
+                 "`gen1` = 1-token /generate probe, 5 s client timeout.\n")
 
     L.append("## 4. Timeout floor (no injection)\n")
     floor_m, per_m = floor_value(fm)
@@ -129,16 +140,32 @@ def main():
         dflt = inj[inj["watchdog_timeout"].astype(str) == "default"]
         if dflt.empty:
             L.append("_no injection runs at stock defaults (WATCHDOG_TIMEOUT unset); the verdict needs those_")
+        L.append(f"Criteria as specified: GO if T_detect at stock defaults >= {a.min_detect:.0f} s AND the zero-false-positive "
+                 f"timeout floor >= {a.min_floor:.0f} s. Measured floor (both workloads): **{floor_both:g} s**, which is the lowest "
+                 f"value tested, so the floor condition **fails regardless of T_detect**.\n")
+        rows = []
         for case in sorted(dflt["case"].dropna().unique()):
             d = dflt[dflt["case"] == case]
             eng = d["t_detect_engine"].median()
             anyc = d[["t_detect_engine", "t_detect_health", "t_detect_gen1"]].min(axis=1).median()
-            go_eng = (eng >= a.min_detect) and (floor_both >= a.min_floor)
-            go_any = (anyc >= a.min_detect) and (floor_both >= a.min_floor)
-            L.append(f"- Case {case}: engine-watchdog T_detect median = {eng:.1f} s -> **{'GO' if go_eng else 'KILL'}**; "
-                     f"any-component T_detect median = {anyc:.1f} s -> **{'GO' if go_any else 'KILL'}** "
-                     f"(criteria: T_detect >= {a.min_detect} s and floor {floor_both} >= {a.min_floor} s)")
-        L.append("")
+            evict = d["t_server_dead"].median()
+            rows.append({"case": case, "runs": len(d),
+                         "T_detect engine (median s)": round(eng, 1),
+                         "T_detect any component (median s)": round(anyc, 1),
+                         "T_evict: replica gone (median s)": round(evict, 1) if pd.notna(evict) else None,
+                         "verdict, engine reading": "GO" if (eng >= a.min_detect and floor_both >= a.min_floor) else "KILL",
+                         "verdict, any-component reading": "GO" if (anyc >= a.min_detect and floor_both >= a.min_floor) else "KILL"})
+        L.append(md_table(pd.DataFrame(rows)) + "\n")
+        L.append("**Verdict: KILL** for the hypothesis as stated. The stock watchdog does take ~6 min to notice a hung rank, "
+                 "but that number is a default, not a floor: the same watchdog ran with zero false positives at 2 s under both "
+                 "workloads, including an overloaded one, because it measures per-step duration rather than request latency.\n")
+        L.append("What the data does support (candidate Phase 2 framing, not claimed here): the interval that stays long after the "
+                 "timeout is lowered is detect-to-evict. After the engine has noticed a failure, the stock crash handler keeps the "
+                 "replica's port open and its HTTP loop frozen for about 65 s more (5 s settle + py-spy + 60 s coredump wait), so "
+                 "neither /health nor a router can learn anything until the process dies; with a 2 s watchdog a hang would still "
+                 "take ~72 s to leave service. Two further blind spots were observed in passing: a startup hang in distributed "
+                 "init that no component detected for 6 h 38 min, and liveness probes whose semantics make them either blind to "
+                 "overload (/health: any output counts) or false-positive-prone under it (1-token generate).\n")
 
     L.append("## 6. Workarounds and observations\n")
     notes = HERE / "results" / "notes.md"
