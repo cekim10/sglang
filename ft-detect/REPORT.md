@@ -1,4 +1,4 @@
-# Failure-detection latency kill test — Phase 1 (SGLang, TP=4)
+# Failure-detection latency kill test — Phase 1 (SGLang, TP=2)
 
 ## 1. Stack
 
@@ -36,7 +36,7 @@
 | sigquit_handler_msg | f"SIGQUIT received. {signum=}, {frame=}. It usually means one child failed." | sglang/srt/managers/tokenizer_manager.py:3637 |  |
 
 Interpretation (from the Step 0 code read):
-- The scheduler watchdog counts `forward_ct`, polls every `timeout/2`, so a hang is noticed 1.0x-1.5x the timeout after the last step, then sleeps 5 s and SIGQUITs the parent, which kills the whole tree. Detection == replica death; there is no 'unhealthy' state.
+- The scheduler watchdog counts `forward_ct`, polls every `timeout/2`, so a hang is noticed 1.0x-1.5x the timeout after the last step, then sleeps 5 s and SIGQUITs the parent. The parent's SIGQUIT handler sleeps 5 s, runs py-spy, waits `SGLANG_CUDA_COREDUMP_BEFORE_CRASH_WAIT_SECS` (60 s, even when coredumps are not enabled) and only then kills the tree. The handler is synchronous in the main thread, so the HTTP event loop is frozen while it runs. The watchdog path has no 'unhealthy' state of its own; the only such state is set by `/health` after 20 s of silence, and nothing in the engine acts on it.
 - A dead rank (non-zero exit code) is noticed by `SubprocessWatchdog` polling every 1 s in the HTTP-server process; a SIGSTOPped rank still counts as alive.
 - `/health` and `/health_generate` share one handler: 200 as soon as *any* engine output arrives, 503 after `SGLANG_HEALTH_CHECK_TIMEOUT` (20 s) of silence.
 - `--dist-timeout` defaults to None (torch default). TP all-reduce under load goes through custom all-reduce / pynccl, which torch's NCCL watchdog does not cover; the gloo CPU group for the per-step request broadcast has a hard-coded 2 h timeout.
@@ -59,12 +59,14 @@ Interpretation (from the Step 0 code read):
 | B_r1_2_20261001-201239 | B | 1 | default | -0.851 | 0.212 | 305.51 | log:watchdog_fire@rank0.log | 21.175 | 3.831 | 14.005 | 375.714 | 10 | 294 | 525.3 | 5074.0 |  |  | False |
 | B_r1_3_20261001-204942 | B | 1 | default | -3.303 | -0.125 | 381.861 | log:watchdog_fire@rank0.log | 20.807 | 2.03 | 12.212 | 452.157 | 27 | 357 | 312.1 | 5429.9 |  |  | False |
 
-Median over runs:
+Median over runs (`teardown` = HTTP server process gone, i.e. the replica actually left service):
 
-| case | watchdog_timeout | runs | engine_med | engine_min | engine_max | health_med | gen1_med | hung_med | new_err_med |
-|---|---|---|---|---|---|---|---|---|---|
-| A | default | 5 | 0.1 | 0.02 | 0.12 | 59.08 | 5.01 | 3.0 | 0.0 |
-| B | default | 8 | 351.95 | 305.51 | 395.31 | 20.15 | 4.96 | 3.0 | 338.0 |
+| case | watchdog_timeout | runs | engine_med | engine_min | engine_max | health_med | health_5s_client_med | gen1_med | teardown_med | teardown_min | teardown_max | hung_med | new_err_med |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| A | default | 5 | 0.1 | 0.02 | 0.12 | 59.08 | 4.09 | 5.01 | 65.3 | 5.18 | 65.35 | 3.0 | 0.0 |
+| B | default | 8 | 351.95 | 305.51 | 395.31 | 20.15 | 5.14 | 4.96 | 422.23 | 375.71 | 465.6 | 3.0 | 338.0 |
+
+Column meanings: `engine` = first detector string in any log or death of a non-injected process; `health` = first non-200 from /health or /health_generate with the probe's 60 s client timeout; `health_5s_client` = when a checker with a 5 s client timeout would first have flagged it (derived from the same probes); `gen1` = 1-token /generate probe, 5 s client timeout.
 
 ## 4. Timeout floor (no injection)
 
@@ -103,13 +105,34 @@ Timeout floor (both workloads): **2** s
 
 ## 5. Verdict
 
-- Case A: engine-watchdog T_detect median = 0.1 s -> **KILL**; any-component T_detect median = 0.1 s -> **KILL** (criteria: T_detect >= 60.0 s and floor 2 >= 10.0 s)
-- Case B: engine-watchdog T_detect median = 351.9 s -> **KILL**; any-component T_detect median = 5.0 s -> **KILL** (criteria: T_detect >= 60.0 s and floor 2 >= 10.0 s)
+Criteria as specified: GO if T_detect at stock defaults >= 60 s AND the zero-false-positive timeout floor >= 10 s. Measured floor (both workloads): **2 s**, which is the lowest value tested, so the floor condition **fails regardless of T_detect**.
+
+| case | runs | T_detect engine (median s) | T_detect any component (median s) | T_evict: replica gone (median s) | verdict, engine reading | verdict, any-component reading |
+|---|---|---|---|---|---|---|
+| A | 5 | 0.1 | 0.1 | 65.3 | KILL | KILL |
+| B | 8 | 351.9 | 5.0 | 422.2 | KILL | KILL |
+
+**Verdict: KILL** for the hypothesis as stated. The stock watchdog does take ~6 min to notice a hung rank, but that number is a default, not a floor: the same watchdog ran with zero false positives at 2 s under both workloads, including an overloaded one, because it measures per-step duration rather than request latency.
+
+What the data does support (candidate Phase 2 framing, not claimed here): the interval that stays long after the timeout is lowered is detect-to-evict. After the engine has noticed a failure, the stock crash handler keeps the replica's port open and its HTTP loop frozen for about 65 s more (5 s settle + py-spy + 60 s coredump wait), so neither /health nor a router can learn anything until the process dies; with a 2 s watchdog a hang would still take ~72 s to leave service. Two further blind spots were observed in passing: a startup hang in distributed init that no component detected for 6 h 38 min, and liveness probes whose semantics make them either blind to overload (/health: any output counts) or false-positive-prone under it (1-token generate).
 
 ## 6. Workarounds and observations
 
+Observations recorded during Phase 1 on elves-01 (2x L40S, SGLang 0.5.19, TP=2). Each item is something the stock stack did that the harness had to work around or that bears directly on detection latency.
+
+- Environment deviation: the task assumed one node with 8 GPUs and --tp 4; the hosts have 2 GPUs each, so all runs use --tp 2 on one node. The process tree, watchdog, SubprocessWatchdog and /health paths are identical to the TP=4 case; only the number of ranks differs.
+- Install: current SGLang releases require CUDA 13 and the host driver supports 12.9, so the last CUDA 12 release (0.5.19, torch 2.13.0+cu129, NCCL 2.29.7) was installed per the v0.5.19 install docs. The defaults measured (watchdog 300 s, /health 20 s, crash-handler waits) are unchanged on current main (c7be3e935b).
+- elves-01 topology: GPU0 and GPU1 sit on different NUMA nodes (nvidia-smi topo = SYS). NCCL picks P2P/CUMEM by default and the transfer silently moves no data (a 2-rank all_reduce returned each rank's own value until torch's 60 s PG watchdog fired). Workaround for every run: NCCL_P2P_DISABLE=1 plus --disable-custom-all-reduce (SHM path, 4.3 ms per 64 MB all-reduce). This does not change the detector picture: TP all-reduce still runs through pynccl, outside torch's ProcessGroup watchdog.
+- Startup hang, undetected for 6 h 38 min: with stock settings the server stalled in "Init torch distributed begin" (custom all-reduce IPC handshake over the broken P2P path). Nothing noticed: the scheduler watchdog is created after model init, /health was connection-refused, and torch's 600 s NCCL default never applied because the stuck collective was not a torch ProcessGroup op. Initialization hangs are outside every detector measured here.
+- Case A (kill -9 rank 1): the surviving rank noticed in 0.02-0.12 s in 5/5 runs via "Scheduler hit an exception" (gloo broadcast peer reset). In one earlier run (discarded, old harness) it was instead the 1 s SubprocessWatchdog poll at 1.47 s, because rank 0 was inside an NCCL collective at the time; which detector fires depends on which collective the survivor is in.
+- Case A teardown is bimodal: 65.3 s in 4/5 runs, 5.2 s in 1/5. The SIGQUIT handler sleeps 5 s, tries py-spy (ptrace denied on this host), then waits 60 s for CUDA coredumps that are not enabled (SGLANG_CUDA_COREDUMP_BEFORE_CRASH defaults True, WAIT_SECS 60). If rank 0 has already exited when the handler looks for scheduler processes it skips straight to kill_process_tree, hence the 5 s mode. The handler is synchronous in the main thread, so the HTTP event loop is frozen the whole time: /health cannot even return 503; our 60 s client timeout is what "detected" it, and a 5 s client timeout would have at ~4 s.
+- Case B (SIGSTOP rank 1): watchdog fired at 351-352 s in 5/5 fixed-phase runs and at 305, 382, 395 s in 3 jittered runs, consistent with the 1.0x-1.5x window from the timeout/2 poll. /health returned 503 at 20.1-21.2 s in all 8 runs; the 1-token probe failed at its 5 s timeout in all 8. Replica left service 70 s after the watchdog fired (375-466 s). Every request admitted during the window was lost (294-373 per run at 0.96 req/s). SGLang takes no action on its own UnHealthy state; the port stays open until the tree is killed.
+- Health probe false positives under normal load: in the first (discarded) case A run /health returned 503 twice and the 1-token probe timed out repeatedly with no fault injected, during a cold-start burst of long prefills (40 s with no decode output). In the 13 kept injection runs, /health false positives in the 5 min before injection were 0 and 1-token false positives were 0-1 per run.
+- Floor sweep, mixed at 0.96 req/s: zero watchdog false positives at 300/60/30/10/5/2 s; dist_timeout 2 s also started fine (48 s). The watchdog measures per-step duration, not request latency, so queueing cannot trip it while 4096-token prefill chunks finish in < 2 s on this hardware.
+- Floor sweep, harsh at 0.96 req/s (the mixed rate; an overload for this profile: TTFT p50 ~400 s, ~half the requests failed/cancelled): still zero watchdog false positives; /health stayed 200 throughout because any output counts as healthy; the 1-token probe showed up to 10 consecutive 5 s timeouts.
 - harsh re-run at its own 70% point (0.39 req/s; saturation 0.55): watchdog 10/5/2 s all clean, 0 request errors, TTFT p50 ~7 s / p99 ~28 s. The 1-token /generate probe still hit up to 10 consecutive 5 s timeouts during 32k-prefill bursts, so a generation-based liveness probe is not usable as a router signal at this timeout without false positives; /health never left 200 because any output counts as healthy.
-- Floor verdict: smallest clean watchdog setting is 2 s (lowest tested) in both workloads, including the overloaded harsh run. The stock default is 150x above the measured floor.
+- Floor verdict: smallest clean watchdog setting is 2 s (lowest tested) in both workloads, including the overloaded harsh run. The stock default is 150x above the measured floor. With a 2 s watchdog a Case B hang would still take ~72 s to leave service (2 + 5 + 65 s of crash-handler waits).
+- Measurement caveat: a fixed launch-to-inject schedule samples the same watchdog poll phase every run (hence 351-352 s five times); INJECT_JITTER was added and the 3 jittered runs span 305-395 s. Case A runs were injected at steady state with ~3 requests in flight at 0.96 req/s, so in-flight hang counts are small by construction.
 
 
 Harness-level workarounds baked in (each one is a finding about the stock stack):
