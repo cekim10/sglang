@@ -41,7 +41,13 @@ def swept_floor(df: pd.DataFrame, knob: str):
     d = d.dropna(subset=["T"])
     if d.empty:
         return None
-    per = d.groupby("T").agg(bad=("spurious_kill", "max"), failed=("launch_failed", "max")).sort_index(ascending=False)
+    # For the request-level RPC knob a "false positive" is a healthy request cut off by the
+    # timeout, which shows up as request errors (HTTP 500), not as an engine event.
+    if knob == "rpc_timeout":
+        d["bad"] = d["spurious_kill"].astype(bool) | (pd.to_numeric(d["n_errors"], errors="coerce").fillna(0) > 0)
+    else:
+        d["bad"] = d["spurious_kill"].astype(bool)
+    per = d.groupby("T").agg(bad=("bad", "max"), failed=("launch_failed", "max")).sort_index(ascending=False)
     floor = None
     for T, row in per.iterrows():
         if bool(row["bad"]) or bool(row["failed"]):
@@ -106,8 +112,8 @@ def main():
         L.append(md_table(df, ["run", "rate", "rpc_timeout", "dist_timeout", "duration_s", "n_requests", "n_errors", "error_kinds", "ttft_p50_ms", "ttft_p99_ms",
                                "spurious_kill", "first_engine_event", "health_non200_changes", "gen1_max_consecutive_bad", "launch_failed"]))
         fr, fd = swept_floor(df, "rpc_timeout"), swept_floor(df, "dist_timeout")
-        L.append(f"\nSmallest clean `--scheduler-rpc-timeout`: **{fr}** s; smallest clean `--dist-timeout`: **{fd}** s "
-                 "(an RPC timeout 'false positive' here means a healthy request was cut off: it is a request-latency timeout, not a step timeout).\n")
+        L.append(f"\nSmallest clean `--scheduler-rpc-timeout`: **{fr}** s (a setting counts as dirty if any healthy request was cut off, "
+                 f"i.e. `n_errors` > 0: it is a request-latency timeout, not a step timeout); smallest clean `--dist-timeout`: **{fd}** s (None = not swept).\n")
         L.append("Hypothetical per-step watchdog floor from measured step durations:\n")
         if ss.empty:
             L.append("_no step_stats CSV; run step_stats.py over the floor runs_\n")

@@ -4,3 +4,4 @@ runs_discarded/
 __pycache__/
 # the repo root ignores *.csv; the result tables must travel with the report
 !results/*.csv
+!diffusion/results/*.csv
