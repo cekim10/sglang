@@ -1,0 +1,13 @@
+## Per run
+
+| run | model | tp | watchdog_timeout | dist_timeout | rpc_timeout | stack | profile | rate | mode | duration_s | n_requests | n_errors | error_kinds | ttft_p50_ms | ttft_p99_ms | spurious_kill | first_engine_event | first_pid_death | health_non200_changes | gen1_non200_changes | gen1_max_consecutive_bad | launch_failed | not_steady | no_engine_detect | no_self_teardown |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| diff_floor_mixed_rpc_T60_20261003-000800 | Tongyi-MAI/Z-Image-Turbo | 2 | absent | default | 60 | sglang-diffusion | mixed | 0.376 | floor | 603.409 | 230 | 0 |  | 3409.4 | 15507.6 | False |  |  | 0 | 0 | 0 | False | False | False | False |
+| diff_floor_mixed_rpc_T30_20261003-001900 | Tongyi-MAI/Z-Image-Turbo | 2 | absent | default | 30 | sglang-diffusion | mixed | 0.376 | floor | 603.452 | 230 | 0 |  | 3268.6 | 15559.9 | False |  |  | 0 | 0 | 0 | False | False | False | False |
+| diff_floor_mixed_rpc_T10_20261003-003001 | Tongyi-MAI/Z-Image-Turbo | 2 | absent | default | 10 | sglang-diffusion | mixed | 0.376 | floor | 603.737 | 230 | 27 | http 500: 'Internal Server Error' | 2781.9 | 9658.0 | False |  |  | 0 | 4 | 2 | False | False | False | False |
+
+### Timeout floor sweep (spurious kills per setting)
+
+| profile | rate | watchdog_timeout | dist_timeout | runs | spurious | errors | ttft_p99_ms |
+|---|---|---|---|---|---|---|---|
+| mixed | 0.376 | absent | default | 3 | 0 | 27 | 15559.9 |
