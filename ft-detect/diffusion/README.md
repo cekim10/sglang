@@ -42,6 +42,7 @@ pip install "sglang[diffusion]==0.5.19"            # once; same venv as Phase 1
 export CUDA_VISIBLE_DEVICES=0,1 NGPU=2 FT_PORT=30000 NCCL_P2P_DISABLE=1
 export MODEL=black-forest-labs/FLUX.1-dev         # needs HF_TOKEN; ~33 GB. Alternatives below.
 export PARALLEL_ARGS="--sp-degree 2 --ulysses-degree 2"   # per-step all-to-all between the two ranks
+export LOAD_ARGS="--steps 9,9,9"                   # turbo models (Z-Image-Turbo): keep the model's step count; omit for FLUX.1-dev
 
 python recon_diff.py                                # Step 0 on the installed version
 ./calibrate_diff.sh mixed                           # prints "70% -> --rate X" and per-shape step times

@@ -48,7 +48,7 @@ for T in $TIMEOUTS; do
     continue
   fi
   "$PYTHON" "$ROOT/probe.py" --gen-timeout 60 > "$RUN/logs/probe.out" 2>&1 & PROBE_PID=$!
-  "$PYTHON" "$HERE/load_diff.py" --rate "$RATE" --duration "$DURATION" --profile "$PROFILE" --drain-timeout 300 \
+  "$PYTHON" "$HERE/load_diff.py" ${LOAD_ARGS:-} --rate "$RATE" --duration "$DURATION" --profile "$PROFILE" --drain-timeout 300 \
       > "$RUN/logs/load.out" 2>&1 & LOAD_PID=$!
   wait "$LOAD_PID"; LOAD_PID=""
   sleep 5

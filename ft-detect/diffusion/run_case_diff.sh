@@ -56,7 +56,7 @@ for i in $(seq 1 "$N"); do
   "$PYTHON" "$HERE/recon_diff.py" --json "$RUN/recon.json" > "$RUN/logs/recon.out" 2>&1 || true
 
   "$PYTHON" "$ROOT/probe.py" --gen-timeout 60 > "$RUN/logs/probe.out" 2>&1 & PROBE_PID=$!
-  "$PYTHON" "$HERE/load_diff.py" --rate "$RATE" --duration "$LOAD_DURATION" --profile "$PROFILE" --tag "$i" \
+  "$PYTHON" "$HERE/load_diff.py" ${LOAD_ARGS:-} --rate "$RATE" --duration "$LOAD_DURATION" --profile "$PROFILE" --tag "$i" \
       > "$RUN/logs/load.out" 2>&1 & LOAD_PID=$!
   echo "[run_case_diff] probe $PROBE_PID load $LOAD_PID; warming up ${MIN_WARMUP}s"
   sleep "$MIN_WARMUP"

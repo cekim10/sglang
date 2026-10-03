@@ -14,7 +14,7 @@ trap '"$PYTHON" "$ROOT/stop.py" || true' EXIT INT TERM
 "$HERE/launch_diff.sh" || exit 1
 "$PYTHON" "$HERE/recon_diff.py" --json "$RUN/recon.json"
 echo "[calibrate] closed loop, concurrency $CONC, ${DURATION}s, profile $PROFILE (no batching: concurrency only fills the queue)"
-"$PYTHON" "$HERE/load_diff.py" --closed-loop "$CONC" --duration "$DURATION" --profile "$PROFILE" --drain-timeout 600 | tee "$RUN/logs/load.out"
+"$PYTHON" "$HERE/load_diff.py" ${LOAD_ARGS:-} --closed-loop "$CONC" --duration "$DURATION" --profile "$PROFILE" --drain-timeout 600 | tee "$RUN/logs/load.out"
 "$PYTHON" "$HERE/step_stats.py" "$RUN" --md "$RUN/step_stats.md" || true
 grep 'saturation' "$RUN/logs/load.out" | tail -1
 echo "[calibrate] export RATE=<the number above>; per-shape step times are in $RUN/step_stats.md"

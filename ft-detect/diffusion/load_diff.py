@@ -196,7 +196,13 @@ def main():
     ap.add_argument("--tag", default="r")
     ap.add_argument("--out", default="requests.jsonl")
     ap.add_argument("--report-every", type=float, default=15.0)
+    ap.add_argument("--steps", default=None,
+                    help="override denoising steps per class, comma list in profile order (e.g. '9,9,9' for a turbo model)")
     a = ap.parse_args()
+    if a.steps:
+        vals = [int(x) for x in a.steps.split(",")]
+        prof = PROFILES[a.profile]
+        PROFILES[a.profile] = [(n, w, sz, vals[i] if i < len(vals) else vals[-1]) for i, (n, w, sz, st) in enumerate(prof)]
     if a.profile == "harsh" and a.burst_period == 0.0:
         a.burst_period = 300.0
     if a.profile == "video":
