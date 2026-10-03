@@ -64,7 +64,7 @@ Note on `TTFT`: images are not streamed, so these are end-to-end latencies; `gen
 | diff_floor_mixed_rpc_T30_20261003-001900 | 0.376 | 30 | default | 603.452 | 230 | 0 |  | 3268.6 | 15559.9 | False |  | 0 | 0 | False |
 | diff_floor_mixed_rpc_T10_20261003-003001 | 0.376 | 10 | default | 603.737 | 230 | 27 | http 500: 'Internal Server Error' | 2781.9 | 9658.0 | False |  | 0 | 2 | False |
 
-Smallest clean `--scheduler-rpc-timeout`: **10** s; smallest clean `--dist-timeout`: **None** s (an RPC timeout 'false positive' here means a healthy request was cut off: it is a request-latency timeout, not a step timeout).
+Smallest clean `--scheduler-rpc-timeout`: **30** s (a setting counts as dirty if any healthy request was cut off, i.e. `n_errors` > 0: it is a request-latency timeout, not a step timeout); smallest clean `--dist-timeout`: **None** s (None = not swept).
 
 Hypothetical per-step watchdog floor from measured step durations:
 
@@ -81,7 +81,7 @@ Global floor across shapes: **1.07 s**; smallest per-shape floor: **0.14 s** (ra
 
 _no data_
 
-Smallest clean `--scheduler-rpc-timeout`: **None** s; smallest clean `--dist-timeout`: **None** s (an RPC timeout 'false positive' here means a healthy request was cut off: it is a request-latency timeout, not a step timeout).
+Smallest clean `--scheduler-rpc-timeout`: **None** s (a setting counts as dirty if any healthy request was cut off, i.e. `n_errors` > 0: it is a request-latency timeout, not a step timeout); smallest clean `--dist-timeout`: **None** s (None = not swept).
 
 Hypothetical per-step watchdog floor from measured step durations:
 
