@@ -44,7 +44,7 @@ for T in $TIMEOUTS; do
   echo "=============== [diffusion] floor profile=$PROFILE $SWEEP T=$T -> $RUN"
   if ! "$HERE/launch_diff.sh"; then
     echo "[sweep_diff] launch failed at T=$T"; touch "$RUN/launch_failed"; "$PYTHON" "$ROOT/stop.py" || true
-    "$PYTHON" "$ROOT/analyze.py" "$RUN" --gap 60 --csv "$HERE/results/floor_${PROFILE}.csv" --md "$HERE/results/floor_${PROFILE}.md" || true
+    "$PYTHON" "$ROOT/analyze.py" "$RUN" --gap 60 --csv "$HERE/results/floor_${PROFILE}.csv" --md "$HERE/results/floor_${PROFILE}.md" > "$RUN/logs/analyze.out" 2>&1 || { echo "[analyze FAILED] see $RUN/logs/analyze.out"; tail -5 "$RUN/logs/analyze.out"; }
     continue
   fi
   "$PYTHON" "$ROOT/probe.py" --gen-timeout 60 > "$RUN/logs/probe.out" 2>&1 & PROBE_PID=$!
@@ -53,7 +53,7 @@ for T in $TIMEOUTS; do
   wait "$LOAD_PID"; LOAD_PID=""
   sleep 5
   cleanup_run
-  "$PYTHON" "$ROOT/analyze.py" "$RUN" --gap 60 --csv "$HERE/results/floor_${PROFILE}.csv" --md "$HERE/results/floor_${PROFILE}.md" || true
+  "$PYTHON" "$ROOT/analyze.py" "$RUN" --gap 60 --csv "$HERE/results/floor_${PROFILE}.csv" --md "$HERE/results/floor_${PROFILE}.md" > "$RUN/logs/analyze.out" 2>&1 || { echo "[analyze FAILED] see $RUN/logs/analyze.out"; tail -5 "$RUN/logs/analyze.out"; }
   "$PYTHON" "$HERE/step_stats.py" "$RUN" --md "$RUN/step_stats.md" || true
   sleep 10
 done

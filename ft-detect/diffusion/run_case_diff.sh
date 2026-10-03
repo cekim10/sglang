@@ -91,7 +91,7 @@ for i in $(seq 1 "$N"); do
   [ "$torn" = 1 ] || { echo "[run_case_diff] stack did not tear the replica down within ${POST_GRACE}s; stopping it ourselves"; touch "$RUN/no_self_teardown"; }
 
   cleanup_run
-  "$PYTHON" "$ROOT/analyze.py" "$RUN" --gap 60 --csv "$HERE/results/case${CASE}.csv" --md "$HERE/results/case${CASE}.md" || true
+  "$PYTHON" "$ROOT/analyze.py" "$RUN" --gap 60 --csv "$HERE/results/case${CASE}.csv" --md "$HERE/results/case${CASE}.md" > "$RUN/logs/analyze.out" 2>&1 || { echo "[analyze FAILED] see $RUN/logs/analyze.out"; tail -5 "$RUN/logs/analyze.out"; }
   sleep 10
 done
 echo "[run_case_diff] done: $HERE/results/case${CASE}.md"
