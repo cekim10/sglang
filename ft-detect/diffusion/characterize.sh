@@ -19,7 +19,7 @@ TAG=${1:?tag, e.g. wan22 or zimage}
 PER_SHAPE=${PER_SHAPE:-5}
 IDLE_PROBE=${IDLE_PROBE:-0}
 PYTHON=${PYTHON:-python}
-RESULTS_DIR=${RESULTS_DIR:-$RESULTS_DIR}
+RESULTS_DIR=${RESULTS_DIR:-$HERE/results}
 RUN="${RUNS_DIR:-$HERE/runs}/diff_char_${TAG}_$(date +%Y%m%d-%H%M%S)"
 export FT_RUN_DIR="$RUN" FT_API=diffusion
 mkdir -p "$RUN/logs" "$RESULTS_DIR"

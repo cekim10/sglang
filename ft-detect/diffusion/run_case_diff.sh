@@ -22,7 +22,7 @@ CASE=${1:?case A|B}; RANK=${2:?target rank}; N=${3:?n_runs}
 : "${RATE:?set RATE (req/s) from calibrate_diff.sh}"
 PROFILE=${PROFILE:-mixed}
 RUNS_DIR=${RUNS_DIR:-$HERE/runs}
-RESULTS_DIR=${RESULTS_DIR:-$RESULTS_DIR}
+RESULTS_DIR=${RESULTS_DIR:-$HERE/results}
 MIN_WARMUP=${MIN_WARMUP:-180}
 STEADY_WAIT=${STEADY_WAIT:-900}
 STEADY_ARGS=${STEADY_ARGS:-"--window 120 --min-reqs 6 --tol 0.5"}

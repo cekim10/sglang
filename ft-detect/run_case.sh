@@ -24,7 +24,7 @@ CASE=${1:?case A|B}; RANK=${2:?target rank}; N=${3:?n_runs}
 : "${RATE:?set RATE (req/s) from calibrate.sh}"
 PROFILE=${PROFILE:-mixed}
 RUNS_DIR=${RUNS_DIR:-$HERE/runs}
-RESULTS_DIR=${RESULTS_DIR:-$RESULTS_DIR}
+RESULTS_DIR=${RESULTS_DIR:-$HERE/results}
 MIN_WARMUP=${MIN_WARMUP:-90}
 STEADY_WAIT=${STEADY_WAIT:-600}
 MAX_DETECT_WAIT=${MAX_DETECT_WAIT:-900}
