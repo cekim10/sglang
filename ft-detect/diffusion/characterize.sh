@@ -11,7 +11,8 @@
 #      IDLE_PROBE (default 0; if N>0, sleep N s before the last request of each shape to sample
 #      an after-idle cold start), plus launch_diff.sh's MODEL / CUDA_VISIBLE_DEVICES / NGPU /
 #      PARALLEL_ARGS / EXTRA_ARGS / FT_PORT. Host quirks (NCCL_P2P_DISABLE, SGLANG_DIFFUSION_IPC_A2A)
-#      are inherited from the shell.
+#      are inherited from the shell. FT_INVENTORY=1 (and FT_INVENTORY_STEP, default 2) adds the
+#      Phase 3a resume-state inventory on every rank -> results/inventory_<tag>.{md,csv}.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); ROOT=$(cd "$HERE/.." && pwd)
 TAG=${1:?tag, e.g. wan22 or zimage}
@@ -40,4 +41,7 @@ if [ "$IDLE_PROBE" -gt 0 ]; then
 fi
 
 "$PYTHON" "$HERE/step_stats.py" "$RUN" --md "$RESULTS_DIR/char_${TAG}.md" --csv "$RESULTS_DIR/char_${TAG}.csv"
+if [ "${FT_INVENTORY:-0}" = "1" ]; then
+  "$PYTHON" "$HERE/inventory.py" "$RUN" --md "$RESULTS_DIR/inventory_${TAG}.md" --csv "$RESULTS_DIR/inventory_${TAG}.csv"
+fi
 echo "[characterize] wrote results/char_${TAG}.{md,csv}; merge all models with: python merge_floor.py results/char_*.csv"

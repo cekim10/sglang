@@ -97,3 +97,23 @@ Video requests go through `POST /v1/videos` (multipart form, returns a queued jo
 polled on `GET /v1/videos/{id}` until `completed`/`failed`; `--shapes` with a frame count
 switches the generator to that path automatically. Add `--fps` via `LOAD_ARGS` if the model's
 default fps/seconds mapping matters.
+
+## Phase 3a: resume-state inventory (what a checkpoint would carry, and who already has it)
+
+With `FT_INVENTORY=1`, every rank records once per request, right after denoising step
+`FT_INVENTORY_STEP` (default 2) completes: the latent tensor (shape, bytes, checksum), the
+scheduler class and any multi-step solver history, conditioning tensors, generator state, the
+total resume bundle `S_state`, and the measured cost of copying that bundle to pinned host memory
+(`T_pin`) and serializing it (`T_save`). `inventory.py` compares ranks: equal latent checksums
+mean the surviving SP rank already holds the full `x_t`; `did_sp_shard_latents` or differing
+checksums mean recovery needs the dead rank's shard. From the code (0.5.19): image models shard
+latents spatially across SP ranks (Z-Image: along H or W); video models shard along latent time
+only when it divides the SP degree, so 17/49/81 frames (latent 5/13/21) stay replicated while
+e.g. 85 frames (latent 22) shard.
+
+```bash
+unset LOAD_ARGS
+FT_INVENTORY=1 SHAPES="512x512@9,1536x1536@9" PER_SHAPE=2 ./characterize.sh inv_zimage          # MODEL=Tongyi-MAI/Z-Image-Turbo
+FT_INVENTORY=1 SHAPES="512x512@9,832x480x17@9,832x480x81@9,832x480x85@9,1280x704x81@9" PER_SHAPE=2 ./characterize.sh inv_wan22_5b
+cat results/inventory_inv_zimage.md results/inventory_inv_wan22_5b.md
+```
