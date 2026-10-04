@@ -29,6 +29,12 @@ if [ -e "$RUN_DIR/pids.json" ]; then
   exit 2
 fi
 mkdir -p "$RUN_DIR/logs" "$RUN_DIR/pids"
+# A server from a previous run still answering on this port would silently serve this run's
+# load while the new ranks sit idle; refuse instead.
+if curl -s -o /dev/null --max-time 3 "http://127.0.0.1:$PORT/health" || curl -s -o /dev/null --max-time 3 "http://127.0.0.1:$PORT/liveness"; then
+  echo "refusing to start: something already answers on port $PORT (stale server from an earlier run?). Find it with: ps -ef | grep -E 'launch_wrapped|sglang' ; stop it via the old run dir: FT_RUN_DIR=<old run> python stop.py" >&2
+  exit 3
+fi
 
 args=(--model-path "$MODEL" --tp-size "$TP" --port "$PORT" --host 127.0.0.1)
 [ -n "${WATCHDOG_TIMEOUT:-}" ] && args+=(--watchdog-timeout "$WATCHDOG_TIMEOUT")
