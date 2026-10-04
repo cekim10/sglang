@@ -94,7 +94,21 @@ def classify_cold(df: pd.DataFrame, idle_s: float) -> pd.DataFrame:
     return df
 
 
-def summarize(df: pd.DataFrame, q: float, safety: float):
+def stage_quanta(st: pd.DataFrame, steps: pd.DataFrame) -> pd.DataFrame:
+    """Largest non-denoising stage per (model, shape), warm (not the rank's first request) and cold."""
+    if st.empty:
+        return pd.DataFrame(columns=["model", "shape", "stage_warm_max_ms", "stage_warm_name", "stage_cold_max_ms"])
+    st = st[~st["stage"].astype(str).str.lower().str.contains("denois")].copy()
+    first = steps.sort_values("t0_ns").groupby(["run", "rank"])["rid"].first().to_dict()
+    st["is_first"] = st.apply(lambda r: first.get((r["run"], r["rank"])) == r["rid"], axis=1)
+    warm = st[~st["is_first"]]
+    idx = warm.groupby(["model", "shape"])["dur_ms"].idxmax()
+    w = warm.loc[idx, ["model", "shape", "dur_ms", "stage"]].rename(columns={"dur_ms": "stage_warm_max_ms", "stage": "stage_warm_name"})
+    c = st[st["is_first"]].groupby(["model", "shape"])["dur_ms"].max().rename("stage_cold_max_ms").reset_index()
+    return w.merge(c, on=["model", "shape"], how="outer")
+
+
+def summarize(df: pd.DataFrame, q: float, safety: float, stages: pd.DataFrame | None = None):
     if df.empty:
         return pd.DataFrame(), None
     df["pixels_frames"] = df["w"].fillna(0) * df["h"].fillna(0) * df["nf"].fillna(1)
@@ -111,8 +125,18 @@ def summarize(df: pd.DataFrame, q: float, safety: float):
     for cat in ("first_after_launch", "first_of_shape", "after_idle"):
         m = df[df["cold"] == cat].groupby(["model", "shape"])["dur_ms"].max().rename(f"max_{cat}_ms").reset_index()
         out = out.merge(m, on=["model", "shape"], how="left")
-    out["D_w_s"] = (out["warm_q_ms"].fillna(out["step_max_ms"]) * safety / 1e3).round(3)
+    out["D_w_step_s"] = (out["warm_q_ms"].fillna(out["step_max_ms"]) * safety / 1e3).round(3)
     out["D_w_all_s"] = (out[["step_max_ms", "gap_max_ms"]].max(axis=1) * safety / 1e3).round(3)
+    sq = stage_quanta(stages, df) if stages is not None and not stages.empty else None
+    if sq is not None and not sq.empty:
+        out = out.merge(sq, on=["model", "shape"], how="left")
+        out["D_w_stage_s"] = (out["stage_warm_max_ms"] * safety / 1e3).round(3)
+    else:
+        out["stage_warm_max_ms"] = out["stage_warm_name"] = out["stage_cold_max_ms"] = out["D_w_stage_s"] = None
+    # the deadline a progress watchdog needs for this workload = its largest execution quantum
+    out["D_w_s"] = out[["D_w_step_s", "D_w_stage_s"]].max(axis=1).round(3)
+    out["D_w_quantum"] = out.apply(lambda r: "step" if pd.isna(r["D_w_stage_s"]) or r["D_w_step_s"] >= r["D_w_stage_s"]
+                                   else str(r["stage_warm_name"]), axis=1)
     d_global = float(out["D_w_s"].max())
     out["slack_x"] = (d_global / out["D_w_s"]).round(1)
     out = out.sort_values("pixels_frames")
@@ -156,11 +180,13 @@ def main():
         print("_no denoising-step records (check steps_rank*.jsonl 'hook' records)_")
         return 1
     steps = classify_cold(steps, a.idle_s)
-    out, d_global = summarize(steps, a.quantile, a.safety)
+    out, d_global = summarize(steps, a.quantile, a.safety, stages)
     stg = stage_table(stages[~stages["stage"].astype(str).str.lower().str.contains("denois")]) if not stages.empty else pd.DataFrame()
-    text = [f"Execution-quantum durations over {len(runs)} run(s). D_w = {a.safety:g} x Q{a.quantile:g}(warm step); D_global = max_w D_w.\n",
+    text = [f"Execution-quantum durations over {len(runs)} run(s). D_w_step = {a.safety:g} x Q{a.quantile:g}(warm step); "
+            f"D_w_stage = {a.safety:g} x max warm non-denoising stage (e.g. VAE decode); D_w = max of the two; D_global = max_w D_w.\n",
             md_table(out),
-            f"\n**D_global = {d_global:.2f} s; smallest D_w = {out['D_w_s'].min():.2f} s; max slack = {out['slack_x'].max():.0f}x.** "
+            f"\n**D_global = {d_global:.2f} s (set by {out.loc[out['D_w_s'].idxmax(), 'shape']} / {out.loc[out['D_w_s'].idxmax(), 'D_w_quantum']}); "
+            f"smallest D_w = {out['D_w_s'].min():.2f} s; max slack = {out['slack_x'].max():.0f}x.** "
             f"Cold categories: `max_first_after_launch_ms`, `max_first_of_shape_ms`, `max_after_idle_ms` are the slowest step of such requests "
             f"(a static watchdog must tolerate them; a progress-aware one can know they are coming).",
             "\nNon-denoising stages (single execution quanta without step boundaries):\n", md_table(stg)]

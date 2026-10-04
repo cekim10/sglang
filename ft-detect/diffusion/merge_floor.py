@@ -40,7 +40,8 @@ def chart(df: pd.DataFrame, d_global: float, width: int = 48) -> str:
         return int(round((math.log10(v) - lo_l) / (hi_l - lo_l) * (width - 1)))
 
     g = pos(d_global)
-    lines = [f"safe step deadline per workload (log axis {lo:g} s .. {hi:.3g} s); '#' = D_w, 'c' = worst cold step, '|' = D_global={d_global:.2f} s", ""]
+    lines = [f"safe deadline per workload = largest warm execution quantum x2 (log axis {lo:g} s .. {hi:.3g} s); "
+             f"'#' = D_w, 'c' = worst cold quantum, '|' = D_global={d_global:.2f} s", ""]
     for _, r in df.iterrows():
         row = [" "] * width
         pw, pc = pos(r["D_w_s"]), pos(r["D_cold_s"]) if not pd.isna(r["D_cold_s"]) else None
@@ -51,7 +52,7 @@ def chart(df: pd.DataFrame, d_global: float, width: int = 48) -> str:
         if g < width:
             row[g] = "|"
         label = f"{r['model'].split('/')[-1][:18]:18s} {r['shape']:>16s}"
-        lines.append(f"{label} {''.join(row)} D_w={r['D_w_s']:.2f}s slack={r['slack_x']:.0f}x")
+        lines.append(f"{label} {''.join(row)} D_w={r['D_w_s']:.2f}s ({r['D_w_quantum'] or 'step'}) slack={r['slack_x']:.0f}x")
     return "\n".join(lines)
 
 
@@ -66,9 +67,14 @@ def main():
         print("no step_stats CSVs (files ending in _stages.csv are skipped)")
         return 1
     df = pd.concat(frames, ignore_index=True).dropna(subset=["D_w_s"])
+    for c in ("D_w_step_s", "D_w_stage_s", "D_w_quantum", "stage_warm_max_ms", "stage_cold_max_ms"):
+        if c not in df.columns:
+            df[c] = None
     df = df[["model", "shape", "pixels_frames", "steps", "requests", "step_p50_ms", "step_p999_ms", "step_max_ms", "warm_q_ms",
-             "max_first_after_launch_ms", "max_first_of_shape_ms", "max_after_idle_ms", "D_w_s"]].copy()
-    df["D_cold_s"] = (df[["max_first_after_launch_ms", "max_first_of_shape_ms", "max_after_idle_ms"]].max(axis=1) * 2 / 1e3).round(2)
+             "max_first_after_launch_ms", "max_first_of_shape_ms", "max_after_idle_ms", "stage_warm_max_ms", "stage_cold_max_ms",
+             "D_w_step_s", "D_w_stage_s", "D_w_quantum", "D_w_s"]].copy()
+    cold_cols = ["max_first_after_launch_ms", "max_first_of_shape_ms", "max_after_idle_ms", "stage_cold_max_ms"]
+    df["D_cold_s"] = (df[cold_cols].apply(pd.to_numeric, errors="coerce").max(axis=1) * 2 / 1e3).round(2)
     d_global = float(df["D_w_s"].max())
     d_global_cold = float(max(d_global, df["D_cold_s"].max()))
     df["slack_x"] = (d_global / df["D_w_s"]).round(1)
