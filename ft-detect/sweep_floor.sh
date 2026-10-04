@@ -19,8 +19,9 @@ TIMEOUTS=${*:-"300 60 30 10 5 2"}
 DURATION=${DURATION:-1200}
 SWEEP=${SWEEP:-together}
 RUNS_DIR=${RUNS_DIR:-$HERE/runs}
+RESULTS_DIR=${RESULTS_DIR:-$RESULTS_DIR}
 PYTHON=${PYTHON:-python}
-mkdir -p "$RUNS_DIR" "$HERE/results"
+mkdir -p "$RUNS_DIR" "$RESULTS_DIR"
 
 cleanup_run() {
   "$PYTHON" "$HERE/stop.py" || true
@@ -46,7 +47,7 @@ for T in $TIMEOUTS; do
   if ! "$HERE/launch.sh"; then
     echo "[sweep] launch failed at T=$T (itself a finding: startup collectives exceed the timeout?)"
     touch "$RUN/launch_failed"; "$PYTHON" "$HERE/stop.py" || true
-    "$PYTHON" "$HERE/analyze.py" "$RUN" --csv "$HERE/results/floor_${PROFILE}.csv" --md "$HERE/results/floor_${PROFILE}.md" || true
+    "$PYTHON" "$HERE/analyze.py" "$RUN" --csv "$RESULTS_DIR/floor_${PROFILE}.csv" --md "$RESULTS_DIR/floor_${PROFILE}.md" || true
     continue
   fi
   "$PYTHON" "$HERE/probe.py" > "$RUN/logs/probe.out" 2>&1 & PROBE_PID=$!
@@ -55,7 +56,7 @@ for T in $TIMEOUTS; do
   wait "$LOAD_PID"; LOAD_PID=""
   sleep 5
   cleanup_run
-  "$PYTHON" "$HERE/analyze.py" "$RUN" --csv "$HERE/results/floor_${PROFILE}.csv" --md "$HERE/results/floor_${PROFILE}.md" || true
+  "$PYTHON" "$HERE/analyze.py" "$RUN" --csv "$RESULTS_DIR/floor_${PROFILE}.csv" --md "$RESULTS_DIR/floor_${PROFILE}.md" || true
   sleep 10
 done
-echo "[sweep] done: $HERE/results/floor_${PROFILE}.md"
+echo "[sweep] done: $RESULTS_DIR/floor_${PROFILE}.md"

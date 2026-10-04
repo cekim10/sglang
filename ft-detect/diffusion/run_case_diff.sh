@@ -22,6 +22,7 @@ CASE=${1:?case A|B}; RANK=${2:?target rank}; N=${3:?n_runs}
 : "${RATE:?set RATE (req/s) from calibrate_diff.sh}"
 PROFILE=${PROFILE:-mixed}
 RUNS_DIR=${RUNS_DIR:-$HERE/runs}
+RESULTS_DIR=${RESULTS_DIR:-$RESULTS_DIR}
 MIN_WARMUP=${MIN_WARMUP:-180}
 STEADY_WAIT=${STEADY_WAIT:-900}
 STEADY_ARGS=${STEADY_ARGS:-"--window 120 --min-reqs 6 --tol 0.5"}
@@ -31,7 +32,7 @@ INJECT_JITTER=${INJECT_JITTER:-0}
 PYTHON=${PYTHON:-python}
 LOAD_DURATION=$(( MIN_WARMUP + STEADY_WAIT + INJECT_JITTER + MAX_DETECT_WAIT + POST_GRACE + 120 ))
 export FT_API=diffusion
-mkdir -p "$RUNS_DIR" "$HERE/results"
+mkdir -p "$RUNS_DIR" "$RESULTS_DIR"
 
 DETECT_RE='"pattern":"(watchdog_fire|scheduler_exception|subprocess_crashed|sigquit|kill_tree|nccl_timeout|nccl_error|abort|torch_dist_error|cuda_error|scheduler_terminated|diff_recv_error|diff_exec_error|diff_max_errors|diff_worker_dead|diff_worker_shutdown|diff_ipc_a2a_timeout)"|"who":"(http_server|rank0)","pid":[0-9]+,"state":"(dead|zombie)"'
 
@@ -91,7 +92,7 @@ for i in $(seq 1 "$N"); do
   [ "$torn" = 1 ] || { echo "[run_case_diff] stack did not tear the replica down within ${POST_GRACE}s; stopping it ourselves"; touch "$RUN/no_self_teardown"; }
 
   cleanup_run
-  "$PYTHON" "$ROOT/analyze.py" "$RUN" --gap 60 --csv "$HERE/results/case${CASE}.csv" --md "$HERE/results/case${CASE}.md" > "$RUN/logs/analyze.out" 2>&1 || { echo "[analyze FAILED] see $RUN/logs/analyze.out"; tail -5 "$RUN/logs/analyze.out"; }
+  "$PYTHON" "$ROOT/analyze.py" "$RUN" --gap 60 --csv "$RESULTS_DIR/case${CASE}.csv" --md "$RESULTS_DIR/case${CASE}.md" > "$RUN/logs/analyze.out" 2>&1 || { echo "[analyze FAILED] see $RUN/logs/analyze.out"; tail -5 "$RUN/logs/analyze.out"; }
   sleep 10
 done
-echo "[run_case_diff] done: $HERE/results/case${CASE}.md"
+echo "[run_case_diff] done: $RESULTS_DIR/case${CASE}.md"

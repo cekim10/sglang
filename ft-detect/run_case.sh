@@ -24,6 +24,7 @@ CASE=${1:?case A|B}; RANK=${2:?target rank}; N=${3:?n_runs}
 : "${RATE:?set RATE (req/s) from calibrate.sh}"
 PROFILE=${PROFILE:-mixed}
 RUNS_DIR=${RUNS_DIR:-$HERE/runs}
+RESULTS_DIR=${RESULTS_DIR:-$RESULTS_DIR}
 MIN_WARMUP=${MIN_WARMUP:-90}
 STEADY_WAIT=${STEADY_WAIT:-600}
 MAX_DETECT_WAIT=${MAX_DETECT_WAIT:-900}
@@ -31,7 +32,7 @@ POST_GRACE=${POST_GRACE:-300}
 INJECT_JITTER=${INJECT_JITTER:-0}
 PYTHON=${PYTHON:-python}
 LOAD_DURATION=$(( MIN_WARMUP + STEADY_WAIT + INJECT_JITTER + MAX_DETECT_WAIT + POST_GRACE + 120 ))
-mkdir -p "$RUNS_DIR" "$HERE/results"
+mkdir -p "$RUNS_DIR" "$RESULTS_DIR"
 
 DETECT_RE='"pattern":"(watchdog_fire|scheduler_exception|subprocess_crashed|sigquit|kill_tree|nccl_timeout|nccl_error|abort|torch_dist_error|cuda_error|scheduler_terminated)"|"who":"http_server","pid":[0-9]+,"state":"(dead|zombie)"'
 
@@ -93,7 +94,7 @@ for i in $(seq 1 "$N"); do
   [ "$torn" = 1 ] || { echo "[run_case] SGLang did not tear the replica down within ${POST_GRACE}s after detection; stopping it ourselves"; touch "$RUN/no_self_teardown"; }
 
   cleanup_run
-  "$PYTHON" "$HERE/analyze.py" "$RUN" --csv "$HERE/results/case${CASE}.csv" --md "$HERE/results/case${CASE}.md" || true
+  "$PYTHON" "$HERE/analyze.py" "$RUN" --csv "$RESULTS_DIR/case${CASE}.csv" --md "$RESULTS_DIR/case${CASE}.md" || true
   sleep 10   # let the GPUs free up before the next launch
 done
-echo "[run_case] done: $HERE/results/case${CASE}.md"
+echo "[run_case] done: $RESULTS_DIR/case${CASE}.md"

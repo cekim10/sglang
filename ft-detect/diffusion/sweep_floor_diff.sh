@@ -17,9 +17,10 @@ TIMEOUTS=${*:-"300 60 30 10 5 2"}
 DURATION=${DURATION:-1200}
 SWEEP=${SWEEP:-rpc}
 RUNS_DIR=${RUNS_DIR:-$HERE/runs}
+RESULTS_DIR=${RESULTS_DIR:-$RESULTS_DIR}
 PYTHON=${PYTHON:-python}
 export FT_API=diffusion
-mkdir -p "$RUNS_DIR" "$HERE/results"
+mkdir -p "$RUNS_DIR" "$RESULTS_DIR"
 
 cleanup_run() {
   "$PYTHON" "$ROOT/stop.py" || true
@@ -44,7 +45,7 @@ for T in $TIMEOUTS; do
   echo "=============== [diffusion] floor profile=$PROFILE $SWEEP T=$T -> $RUN"
   if ! "$HERE/launch_diff.sh"; then
     echo "[sweep_diff] launch failed at T=$T"; touch "$RUN/launch_failed"; "$PYTHON" "$ROOT/stop.py" || true
-    "$PYTHON" "$ROOT/analyze.py" "$RUN" --gap 60 --csv "$HERE/results/floor_${PROFILE}.csv" --md "$HERE/results/floor_${PROFILE}.md" > "$RUN/logs/analyze.out" 2>&1 || { echo "[analyze FAILED] see $RUN/logs/analyze.out"; tail -5 "$RUN/logs/analyze.out"; }
+    "$PYTHON" "$ROOT/analyze.py" "$RUN" --gap 60 --csv "$RESULTS_DIR/floor_${PROFILE}.csv" --md "$RESULTS_DIR/floor_${PROFILE}.md" > "$RUN/logs/analyze.out" 2>&1 || { echo "[analyze FAILED] see $RUN/logs/analyze.out"; tail -5 "$RUN/logs/analyze.out"; }
     continue
   fi
   "$PYTHON" "$ROOT/probe.py" --gen-timeout 60 > "$RUN/logs/probe.out" 2>&1 & PROBE_PID=$!
@@ -53,9 +54,9 @@ for T in $TIMEOUTS; do
   wait "$LOAD_PID"; LOAD_PID=""
   sleep 5
   cleanup_run
-  "$PYTHON" "$ROOT/analyze.py" "$RUN" --gap 60 --csv "$HERE/results/floor_${PROFILE}.csv" --md "$HERE/results/floor_${PROFILE}.md" > "$RUN/logs/analyze.out" 2>&1 || { echo "[analyze FAILED] see $RUN/logs/analyze.out"; tail -5 "$RUN/logs/analyze.out"; }
+  "$PYTHON" "$ROOT/analyze.py" "$RUN" --gap 60 --csv "$RESULTS_DIR/floor_${PROFILE}.csv" --md "$RESULTS_DIR/floor_${PROFILE}.md" > "$RUN/logs/analyze.out" 2>&1 || { echo "[analyze FAILED] see $RUN/logs/analyze.out"; tail -5 "$RUN/logs/analyze.out"; }
   "$PYTHON" "$HERE/step_stats.py" "$RUN" --md "$RUN/step_stats.md" || true
   sleep 10
 done
-"$PYTHON" "$HERE/step_stats.py" "$RUNS_DIR"/diff_floor_"$PROFILE"_* --md "$HERE/results/step_stats_${PROFILE}.md" --csv "$HERE/results/step_stats_${PROFILE}.csv" || true
-echo "[sweep_diff] done: $HERE/results/floor_${PROFILE}.md and step_stats_${PROFILE}.md"
+"$PYTHON" "$HERE/step_stats.py" "$RUNS_DIR"/diff_floor_"$PROFILE"_* --md "$RESULTS_DIR/step_stats_${PROFILE}.md" --csv "$RESULTS_DIR/step_stats_${PROFILE}.csv" || true
+echo "[sweep_diff] done: $RESULTS_DIR/floor_${PROFILE}.md and step_stats_${PROFILE}.md"

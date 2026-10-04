@@ -19,9 +19,10 @@ TAG=${1:?tag, e.g. wan22 or zimage}
 PER_SHAPE=${PER_SHAPE:-5}
 IDLE_PROBE=${IDLE_PROBE:-0}
 PYTHON=${PYTHON:-python}
+RESULTS_DIR=${RESULTS_DIR:-$RESULTS_DIR}
 RUN="${RUNS_DIR:-$HERE/runs}/diff_char_${TAG}_$(date +%Y%m%d-%H%M%S)"
 export FT_RUN_DIR="$RUN" FT_API=diffusion
-mkdir -p "$RUN/logs" "$HERE/results"
+mkdir -p "$RUN/logs" "$RESULTS_DIR"
 trap '"$PYTHON" "$ROOT/stop.py" || true' EXIT INT TERM
 
 "$HERE/launch_diff.sh" || exit 1
@@ -38,5 +39,5 @@ if [ "$IDLE_PROBE" -gt 0 ]; then
       --duration 100000 2>&1 | tee -a "$RUN/logs/load.out" | grep -v "^\[load\] t="
 fi
 
-"$PYTHON" "$HERE/step_stats.py" "$RUN" --md "$HERE/results/char_${TAG}.md" --csv "$HERE/results/char_${TAG}.csv"
+"$PYTHON" "$HERE/step_stats.py" "$RUN" --md "$RESULTS_DIR/char_${TAG}.md" --csv "$RESULTS_DIR/char_${TAG}.csv"
 echo "[characterize] wrote results/char_${TAG}.{md,csv}; merge all models with: python merge_floor.py results/char_*.csv"
