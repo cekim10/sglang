@@ -60,11 +60,12 @@ def main():
     ap.add_argument("csvs", nargs="+")
     ap.add_argument("--md", default=None)
     a = ap.parse_args()
-    frames = [pd.read_csv(p) for p in a.csvs if Path(p).exists()]
+    paths = [p for p in a.csvs if Path(p).exists() and not p.endswith("_stages.csv")]
+    frames = [f for f in (pd.read_csv(p) for p in paths) if "D_w_s" in f.columns]
     if not frames:
-        print("no CSVs")
+        print("no step_stats CSVs (files ending in _stages.csv are skipped)")
         return 1
-    df = pd.concat(frames, ignore_index=True)
+    df = pd.concat(frames, ignore_index=True).dropna(subset=["D_w_s"])
     df = df[["model", "shape", "pixels_frames", "steps", "requests", "step_p50_ms", "step_p999_ms", "step_max_ms", "warm_q_ms",
              "max_first_after_launch_ms", "max_first_of_shape_ms", "max_after_idle_ms", "D_w_s"]].copy()
     df["D_cold_s"] = (df[["max_first_after_launch_ms", "max_first_of_shape_ms", "max_after_idle_ms"]].max(axis=1) * 2 / 1e3).round(2)
@@ -73,7 +74,8 @@ def main():
     df["slack_x"] = (d_global / df["D_w_s"]).round(1)
     df["slack_incl_cold_x"] = (d_global_cold / df["D_w_s"]).round(1)
     df = df.sort_values("pixels_frames")
-    out = [f"Merged over {len(frames)} characterization CSV(s), {df['model'].nunique()} model(s), {len(df)} workload(s).\n",
+    out = [f"Merged over {len(frames)} characterization CSV(s) ({', '.join(Path(p).name for p in paths)}), "
+           f"{df['model'].nunique()} model(s), {len(df)} workload(s).\n",
            md_table(df),
            f"\n**D_global (warm) = {d_global:.2f} s; D_global including cold steps = {d_global_cold:.2f} s; "
            f"smallest D_w = {df['D_w_s'].min():.3f} s; max slack = {df['slack_x'].max():.0f}x (incl. cold: {df['slack_incl_cold_x'].max():.0f}x).**\n",
