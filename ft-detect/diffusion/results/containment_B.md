@@ -1,0 +1,18 @@
+Containment timeline per surviving rank (s after t_inject).
+
+| run | model | rank | deadline_s | abort_mode | abort_how | abort_ok | abort_error | t_last_progress | t_deadline_miss | t_abort_returned | T_abort_call_ms | t_main_exception | T_abort_effect_ms | main_exception | t_req_end | t_loop_idle | cuda_mem_before_MiB | cuda_mem_after_MiB | t_first_client_error | rank_dead_at | observed_until | abort_still_blocked_at_stop | post_abort_errors | post_abort_time_to_error_p50_s |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| diff_B_r1_1_20261002-221223 | Tongyi-MAI/Z-Image-Turbo | 0 |  |  |  |  |  | -0.177 |  |  |  |  |  |  |  |  | 0 | 0 | 10.873 | 660.334 | 662.413 | False | 0 |  |
+| diff_B_r1_1_20261003-195944 | Wan-AI/Wan2.2-TI2V-5B-Diffusers | 0 | 10.0 |  |  |  |  | -0.005 | 10.017 |  |  |  |  |  |  |  | 12479 | 0 | 1.572 |  | 70.535 | True | 0 |  |
+| diff_B_r1_1_20261003-204734 | Wan-AI/Wan2.2-TI2V-5B-Diffusers | 0 | 10.0 |  |  |  |  | 0.094 | 10.109 |  |  |  |  |  |  |  | 12438 | 0 | 1.574 |  | 72.568 | True | 0 |  |
+| diff_B_r1_1_20261003-213743 | Wan-AI/Wan2.2-TI2V-5B-Diffusers | 0 |  |  |  |  |  | 0.398 |  |  |  | 0.396 |  | RuntimeError('NCCL Error 7: NCCL operation in progress') |  |  | 0 | 0 | 0.059 |  | 181.653 | False | 0 |  |
+| diff_B_r1_1_20261003-215259 | Wan-AI/Wan2.2-TI2V-5B-Diffusers | 0 | 10.0 | exit | os._exit(3) | True |  | 0.013 | 10.016 | 10.019 | 3.3 |  |  |  |  |  | 12397 | 12397 | 0.059 | 18.352 | 70.55 | False | 115 | 0.0 |
+| diff_B_r1_1_20261003-221215 | Wan-AI/Wan2.2-TI2V-5B-Diffusers | 0 | 10.0 |  |  |  |  | -0.014 | 10.015 |  |  |  |  |  |  |  | 12424 | 0 | 0.063 | 660.17 | 661.021 | True | 0 |  |
+| diff_B_r1_2_20261002-225055 | Tongyi-MAI/Z-Image-Turbo | 0 |  |  |  |  |  | -0.233 |  |  |  |  |  |  |  |  | 0 | 0 | 10.872 |  | 662.399 | False | 0 |  |
+| diff_B_r1_2_20261003-202338 | Wan-AI/Wan2.2-TI2V-5B-Diffusers | 0 | 10.0 |  |  |  |  | 0.261 | 10.272 |  |  |  |  |  |  |  | 12396 | 0 | 1.546 |  | 72.581 | True | 0 |  |
+| diff_B_r1_2_20261003-211127 | Wan-AI/Wan2.2-TI2V-5B-Diffusers | 0 | 10.0 |  |  |  |  | -0.008 | 9.999 |  |  |  |  |  |  |  | 12397 | 0 | 1.544 |  | 70.541 | True | 0 |  |
+| diff_B_r1_2_20261003-214522 | Wan-AI/Wan2.2-TI2V-5B-Diffusers | 0 |  |  |  |  |  | -0.046 |  |  |  |  |  |  | 0.575 |  | 0 | 0 | 0.061 |  | 181.599 | False | 0 |  |
+| diff_B_r1_2_20261003-220035 | Wan-AI/Wan2.2-TI2V-5B-Diffusers | 0 | 10.0 | exit | os._exit(3) | True |  | -0.013 | 10.018 | 10.02 | 2.0 |  |  |  |  |  | 12424 | 12424 | 0.059 | 10.127 | 70.541 | False | 115 | 0.0 |
+| diff_B_r1_3_20261002-232927 | Tongyi-MAI/Z-Image-Turbo | 0 |  |  |  |  |  | -0.27 |  |  |  |  |  |  |  |  | 0 | 0 | 10.871 |  | 662.46 | False | 0 |  |
+
+`T_abort_call` = probe thread's abort call duration; `T_abort_effect` = until the blocked collective raised in the main thread; `t_req_end` = scheduler saw the in-flight request fail; `t_loop_idle` = rank back at its receive loop; `post_abort_time_to_error` = how quickly later requests fail (fail-fast) instead of hanging again.
