@@ -79,5 +79,6 @@ while true; do
   sleep 2
 done
 echo "[launch] ready after $(( $(date +%s) - t0 )) s"
+"$PYTHON" -c "import json,time;json.dump({'wall_ready':time.time(),'ready_after_s':$(( $(date +%s) - t0 ))},open('$RUN_DIR/ready.json','w'))"
 cat "$RUN_DIR/pids.json"
 "$PYTHON" "$HERE/recon_diff.py" --tree || true

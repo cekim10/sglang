@@ -150,3 +150,34 @@ TORCH_NCCL_USE_COMM_NONBLOCKING=1 FT_ABORT_PROBE=1 FT_ABORT_DEADLINE_S=10 MIN_WA
 # process-level containment floor: the rank exits at the deadline instead of aborting
 FT_ABORT_MODE=exit FT_ABORT_PROBE=1 FT_ABORT_DEADLINE_S=10 MIN_WARMUP=45 STEADY_WAIT=60 MAX_DETECT_WAIT=120 POST_GRACE=60 ./run_case_diff.sh B 1 2
 ```
+
+## Phase 3b-1: trajectory portability (SP=2 boundary state -> fresh SP=1 process)
+
+`portability.sh <tag> <shape> <steps> <k>` runs one fixed request (`one_request.py`, fixed
+prompt and seed) under five fresh servers: SP=2 saving the state after step k and the final
+latents; SP=1 reference twice (noise floor); SP=1 resumed from the saved state at step k+1 with
+the full multi-step solver history; and the same with the history reset (low-order restart).
+The wrapper does the save/skip/inject (`FT_TRAJ_*`); SGLang is unmodified.
+`trajectory_compare.py` reports exact equality, max-abs / relative-L2 distance of the final
+latents, output hash equality, restore time, first resumed step time and remaining completion time.
+
+```bash
+unset LOAD_ARGS
+MODEL=Wan-AI/Wan2.2-TI2V-5B-Diffusers ./portability.sh wan_480p81 832x480x81 9 3     # UniPC: history matters
+MODEL=Tongyi-MAI/Z-Image-Turbo        ./portability.sh zimage_1024 1024x1024 9 3     # Euler: control without history
+cat results/traj_wan_480p81/compare.md results/traj_zimage_1024/compare.md
+```
+
+Gate (agreed in advance): `sp1_full` matches `sp1_ref` within the SP2<->SP1 control (`sp2_save` vs
+`sp1_ref`) and the run-to-run floor (`sp1_ref2`) -> GO. Bit-exactness lost only to collective
+ordering is not a KILL. `sp1_lower` quality is a secondary result.
+
+## Phase 3b-2 prerequisite: restart decomposition from existing logs
+
+`startup_decomp.py runs/...` splits launch -> /health 200 into spawn, import, dist init,
+load (weights + H2D + device setup, not separable in the logs) and warmup, using our own
+records and the runtime's log lines. New runs also write `ready.json`.
+
+```bash
+python startup_decomp.py runs/diff_char_* runs/traj_* --md results/startup_decomp.md
+```

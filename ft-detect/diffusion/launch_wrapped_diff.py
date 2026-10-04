@@ -148,6 +148,119 @@ def _abort_probe_thread(steps: "JsonlWriter", rank: int) -> None:
             return
 
 
+# ---- Phase 3b-1: trajectory save / resume across processes and SP degrees --------------------
+# Save:   FT_TRAJ_SAVE_DIR=<dir> [FT_TRAJ_SAVE_STEP=k]  -> <dir>/traj_step<k>_rank<r>.pt after step k,
+#         and always <dir>/final_rank<r>.pt after the last step (full, gathered latents).
+# Resume: FT_TRAJ_RESUME=<traj file> FT_TRAJ_RESUME_STEP=k FT_TRAJ_MODE=full|lower
+#         steps 0..k are skipped (no compute); before step k+1 the saved latents and scheduler
+#         state are injected ('full' restores the multi-step solver history, 'lower' resets it so
+#         the solver restarts at low order). Timings go to steps_rank<r>.jsonl as ev 'traj'.
+_TRAJ = {"resumed": False, "t_resume_ns": None, "first_step_done": False}
+_SCHED_ATTRS = ("_step_index", "_begin_index", "model_outputs", "last_sample", "timestep_list",
+                "lower_order_nums", "this_order")
+
+
+def _gather_full(t, batch, server_args):
+    """Full (unsharded) copy of a per-rank latent-shaped tensor; a collective when sharded."""
+    import torch
+
+    if not isinstance(t, torch.Tensor):
+        return t
+    if getattr(batch, "did_sp_shard_latents", False):
+        try:
+            return server_args.pipeline_config.gather_latents_for_sp(t, batch)
+        except TypeError:
+            return server_args.pipeline_config.gather_latents_for_sp(t)
+    return t
+
+
+def _traj_bundle(ctx, step, batch, server_args):
+    import torch
+
+    sch = ctx.scheduler
+    b = {"step_index": int(step.step_index), "num_inference_steps": int(ctx.num_inference_steps),
+         "latents": _gather_full(ctx.latents, batch, server_args).detach().clone(),
+         "latents_local_shape": list(ctx.latents.shape),
+         "did_sp_shard_latents": bool(getattr(batch, "did_sp_shard_latents", False)),
+         "scheduler_class": type(sch).__name__, "scheduler": {}}
+    for name in _SCHED_ATTRS:
+        if not hasattr(sch, name):
+            continue
+        v = getattr(sch, name)
+        if isinstance(v, torch.Tensor):
+            v = _gather_full(v, batch, server_args).detach().clone()
+        elif isinstance(v, list):
+            v = [(_gather_full(x, batch, server_args).detach().clone() if isinstance(x, torch.Tensor) else x) for x in v]
+        b["scheduler"][name] = v
+    b["timesteps"] = ctx.timesteps.detach().clone()
+    b["rid"] = _shape_of(batch).get("rid")
+    return b
+
+
+def _traj_save(ctx, step, batch, server_args, rank, tag):
+    import torch
+
+    d = os.environ.get("FT_TRAJ_SAVE_DIR")
+    if not d:
+        return None
+    os.makedirs(d, exist_ok=True)
+    t0 = now_ns()
+    b = _traj_bundle(ctx, step, batch, server_args)
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    t1 = now_ns()
+    path = os.path.join(d, f"{tag}_rank{rank}.pt")
+    torch.save({k: (v.cpu() if isinstance(v, torch.Tensor) else v) for k, v in b.items()} | {
+        "scheduler": {k: (v.cpu() if isinstance(v, torch.Tensor) else [x.cpu() if isinstance(x, torch.Tensor) else x for x in v] if isinstance(v, list) else v)
+                      for k, v in b["scheduler"].items()}}, path)
+    t2 = now_ns()
+    return {"path": path, "t_bundle_ms": (t1 - t0) / 1e6, "t_save_ms": (t2 - t1) / 1e6, "bytes": os.path.getsize(path)}
+
+
+def _traj_restore(ctx, batch, device):
+    """Inject the saved boundary state into ctx/scheduler before the first resumed step."""
+    import torch
+
+    path = os.environ["FT_TRAJ_RESUME"]
+    mode = os.environ.get("FT_TRAJ_MODE", "full")
+    t0 = now_ns()
+    saved = torch.load(path, map_location="cpu", weights_only=False)
+    t1 = now_ns()
+    lat = saved["latents"].to(device=device, dtype=ctx.latents.dtype)
+    notes = []
+    if list(lat.shape) != list(ctx.latents.shape):
+        # generic image configs pad the sequence before sharding; crop back to the live shape
+        sl = tuple(slice(0, n) for n in ctx.latents.shape)
+        notes.append(f"shape {list(lat.shape)} -> {list(ctx.latents.shape)}")
+        lat = lat[sl]
+    ctx.latents = lat.contiguous()
+    sch = ctx.scheduler
+    for name, v in saved["scheduler"].items():
+        if not hasattr(sch, name):
+            continue
+        if mode == "lower" and name in ("model_outputs", "last_sample", "timestep_list", "lower_order_nums", "this_order"):
+            cur = getattr(sch, name)
+            if name == "model_outputs" and isinstance(cur, list):
+                setattr(sch, name, [None] * len(cur))
+            elif name == "timestep_list" and isinstance(cur, list):
+                setattr(sch, name, [None] * len(cur))
+            elif name == "lower_order_nums":
+                setattr(sch, name, 0)
+            elif name == "last_sample":
+                setattr(sch, name, None)
+            continue
+        if isinstance(v, torch.Tensor):
+            v = v.to(device=device)
+        elif isinstance(v, list):
+            v = [x.to(device=device) if isinstance(x, torch.Tensor) else x for x in v]
+        setattr(sch, name, v)
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+    t2 = now_ns()
+    return {"path": path, "mode": mode, "saved_step": saved["step_index"], "t_load_ms": (t1 - t0) / 1e6,
+            "t_inject_ms": (t2 - t1) / 1e6, "notes": notes, "scheduler_class": saved.get("scheduler_class")}
+
+
 # ---- Phase 3a: resume-state inventory at a denoising-step boundary -------------------------
 # Enabled with FT_INVENTORY=1; taken once per request on every rank right after step
 # FT_INVENTORY_STEP (default 2) completes, i.e. when ctx.latents is x_{t-1} at a boundary.
@@ -312,8 +425,23 @@ def _install_step_logger(rank: int) -> None:
 
         inventory_on = os.environ.get("FT_INVENTORY", "0") == "1"
         inventory_step = int(os.environ.get("FT_INVENTORY_STEP", "2"))
+        traj_save_step = int(os.environ["FT_TRAJ_SAVE_STEP"]) if os.environ.get("FT_TRAJ_SAVE_STEP") else None
+        traj_resume = os.environ.get("FT_TRAJ_RESUME")
+        traj_resume_step = int(os.environ.get("FT_TRAJ_RESUME_STEP", "-1"))
 
         def _run_denoising_step(self, ctx, step, batch, server_args, *a, **k):
+            si = getattr(step, "step_index", None)
+            if traj_resume and si is not None and si <= traj_resume_step:
+                steps.write({"ev": "ds_skip", "i": si})
+                return None
+            if traj_resume and si == traj_resume_step + 1 and not _TRAJ["resumed"]:
+                try:
+                    info = _traj_restore(ctx, batch, ctx.latents.device)
+                    _TRAJ.update({"resumed": True, "t_resume_ns": now_ns()})
+                    steps.write({"ev": "traj", "phase": "restored", **info})
+                except Exception as e:
+                    steps.write({"ev": "traj", "phase": "restore_failed", "error": repr(e)[:300]})
+                    raise
             t0 = now_ns()
             try:
                 r = orig_step(self, ctx, step, batch, server_args, *a, **k)
@@ -335,6 +463,20 @@ def _install_step_logger(rank: int) -> None:
                     steps.write(_inventory_record(ctx, step, batch, rank))
                 except Exception as e:
                     steps.write({"ev": "inventory_error", "error": repr(e)})
+            if traj_resume and _TRAJ["resumed"] and not _TRAJ["first_step_done"]:
+                _TRAJ["first_step_done"] = True
+                steps.write({"ev": "traj", "phase": "first_resumed_step", "i": si, "t_step_ms": (now_ns() - t0) / 1e6})
+            n_steps = getattr(ctx, "num_inference_steps", None)
+            if os.environ.get("FT_TRAJ_SAVE_DIR"):
+                try:
+                    if traj_save_step is not None and si == traj_save_step:
+                        steps.write({"ev": "traj", "phase": "saved", "i": si, **_traj_save(ctx, step, batch, server_args, rank, f"traj_step{si}")})
+                    if n_steps is not None and si == n_steps - 1:
+                        steps.write({"ev": "traj", "phase": "final_saved", "i": si, **_traj_save(ctx, step, batch, server_args, rank, "final")})
+                        if _TRAJ["resumed"]:
+                            steps.write({"ev": "traj", "phase": "remaining_done", "t_remaining_ms": (now_ns() - _TRAJ["t_resume_ns"]) / 1e6})
+                except Exception as e:
+                    steps.write({"ev": "traj", "phase": "save_failed", "error": repr(e)[:300]})
             return r
 
         DenoisingStage._run_denoising_step = _run_denoising_step
