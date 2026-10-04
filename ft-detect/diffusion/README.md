@@ -117,3 +117,26 @@ FT_INVENTORY=1 SHAPES="512x512@9,1536x1536@9" PER_SHAPE=2 ./characterize.sh inv_
 FT_INVENTORY=1 SHAPES="512x512@9,832x480x17@9,832x480x81@9,832x480x85@9,1280x704x81@9" PER_SHAPE=2 ./characterize.sh inv_wan22_5b
 cat results/inventory_inv_zimage.md results/inventory_inv_wan22_5b.md
 ```
+
+## Phase 3c: containment cost (abort a stuck collective, fail the request, keep the rank)
+
+`FT_ABORT_PROBE=1` arms a measurement thread in every rank: if a request is in flight and no
+quantum (stage or step) has completed for `FT_ABORT_DEADLINE_S` s, it calls
+`torch.distributed.distributed_c10d._abort_process_group` (`FT_ABORT_MODE=all|sp|world`) and
+timestamps: deadline miss, abort returned, the exception surfacing in the blocked main thread,
+the request ending, the rank back at its receive loop, CUDA memory before/after. Nothing marks the
+replica unroutable; that cost is measured separately and is tiny (an asyncio event in the HTTP
+process). Run case B with the probe and read the timeline:
+
+```bash
+unset LOAD_ARGS; export MODEL=Wan-AI/Wan2.2-TI2V-5B-Diffusers
+FT_ABORT_PROBE=1 FT_ABORT_DEADLINE_S=10 MAX_DETECT_WAIT=120 POST_GRACE=60 ./run_case_diff.sh B 1 2
+TORCH_NCCL_ASYNC_ERROR_HANDLING=0 FT_ABORT_PROBE=1 FT_ABORT_DEADLINE_S=10 MAX_DETECT_WAIT=120 POST_GRACE=60 ./run_case_diff.sh B 1 2
+cat results/containment_B.md
+```
+
+Expected outcomes to distinguish: (a) abort returns in ms, the main thread raises, the request
+fails, the rank lives and later requests fail fast -> containment is bounded by the deadline;
+(b) abort returns but the main thread stays blocked (kernel spinning) -> containment needs a
+different primitive; (c) the rank dies (torch async error handling tears it down) -> containment
+equals restart. The SIGSTOPped peer is SIGCONTed by stop.py at the end of the run.

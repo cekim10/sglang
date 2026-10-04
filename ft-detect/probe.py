@@ -55,6 +55,8 @@ PATTERNS = {
     "diff_worker_dead": re.compile(r"scheduler is dead|Worker process\(es\) did not|Exit code:"),
     "diff_worker_shutdown": re.compile(r"Worker \d+: Shutdown complete"),
     "diff_ipc_a2a_timeout": re.compile(r"IPC_A2A|ipc_a2a|IPC a2a|all-to-all.*timed out|a2a.*timeout", re.I),
+    "ft_abort_miss": re.compile(r"FT_ABORT_PROBE deadline miss"),
+    "ft_abort_done": re.compile(r"FT_ABORT_PROBE abort returned"),
 }
 MAX_HITS_PER_KEY = 5
 

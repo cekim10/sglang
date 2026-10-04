@@ -51,6 +51,93 @@ def _shape_of(batch):
     }
 
 
+# ---- Phase 3c: containment probe (measurement only) -----------------------------------------
+# FT_ABORT_PROBE=1 starts a thread per rank that watches our own progress records (stage and
+# step hooks update _PROGRESS). If a request is in flight and no quantum has completed for
+# FT_ABORT_DEADLINE_S seconds, the thread aborts the torch process groups
+# (torch.distributed.distributed_c10d._abort_process_group -> ncclCommAbort) and timestamps
+# every phase so the cost of containment can be measured: deadline miss -> abort call ->
+# abort return -> exception surfacing in the main thread -> request end -> loop alive again.
+# This is a probe for the experiment, not a detector for production: the deadline is a
+# constant, and nothing marks the replica unroutable.
+import threading as _threading
+
+_PROGRESS = {"last_ns": 0, "in_request": False, "req_start_ns": 0, "fired": False, "lock": _threading.Lock()}
+
+
+def _progress_touch():
+    _PROGRESS["last_ns"] = now_ns()
+
+
+def _abort_all_groups(log) -> dict:
+    """Abort every torch process group this rank holds; returns per-attempt timings."""
+    import torch
+    import torch.distributed as dist
+    from torch.distributed import distributed_c10d as c10d
+
+    out = {"attempts": []}
+    if not dist.is_initialized():
+        out["error"] = "torch.distributed not initialized"
+        return out
+    mode = os.environ.get("FT_ABORT_MODE", "all")   # all | sp | world
+    groups = []
+    if mode in ("sp", "world"):
+        try:
+            from sglang.multimodal_gen.runtime.distributed import parallel_state as ps
+
+            g = (ps.get_sp_group() if mode == "sp" else ps.get_world_group()).device_group
+            groups.append((mode, g))
+        except Exception as e:
+            out["error"] = f"group lookup failed: {e!r}"
+    for name, g in groups or [("all", None)]:
+        t0 = now_ns()
+        try:
+            if hasattr(c10d, "_abort_process_group"):
+                c10d._abort_process_group(g)
+                how = "c10d._abort_process_group"
+            else:
+                (g or dist.group.WORLD).abort()
+                how = "ProcessGroup.abort"
+            out["attempts"].append({"group": name, "how": how, "ok": True, "t0_ns": t0, "t_ns": now_ns()})
+        except Exception as e:
+            out["attempts"].append({"group": name, "ok": False, "error": repr(e), "t0_ns": t0, "t_ns": now_ns()})
+    return out
+
+
+def _abort_probe_thread(steps: "JsonlWriter", rank: int) -> None:
+    import torch
+
+    deadline_s = float(os.environ.get("FT_ABORT_DEADLINE_S", "10"))
+    while True:
+        time.sleep(0.05)
+        if not _PROGRESS["in_request"] or _PROGRESS["fired"]:
+            continue
+        last = max(_PROGRESS["last_ns"], _PROGRESS["req_start_ns"])
+        if last and (now_ns() - last) / 1e9 >= deadline_s:
+            with _PROGRESS["lock"]:
+                if _PROGRESS["fired"]:
+                    continue
+                _PROGRESS["fired"] = True
+            t_miss = now_ns()
+            mem0 = torch.cuda.memory_allocated() if torch.cuda.is_available() else None
+            print(f"[ft-detect] FT_ABORT_PROBE deadline miss: no progress for {deadline_s}s (rank{rank}); aborting process groups", flush=True)
+            steps.write({"ev": "abort_probe", "phase": "deadline_miss", "deadline_s": deadline_s, "t_ns": t_miss,
+                         "last_progress_ns": last, "cuda_mem_alloc": mem0})
+            res = _abort_all_groups(print)
+            t_ret = now_ns()
+            print(f"[ft-detect] FT_ABORT_PROBE abort returned after {(t_ret - t_miss) / 1e6:.1f} ms: {res}", flush=True)
+            steps.write({"ev": "abort_probe", "phase": "abort_returned", "t_ns": t_ret, "result": res,
+                         "cuda_mem_alloc": torch.cuda.memory_allocated() if torch.cuda.is_available() else None})
+            # keep watching: record whether the process is still alive and the loop resumes
+            for i in range(600):
+                time.sleep(0.5)
+                if not _PROGRESS["in_request"]:
+                    steps.write({"ev": "abort_probe", "phase": "loop_idle_again", "t_ns": now_ns(),
+                                 "cuda_mem_alloc": torch.cuda.memory_allocated() if torch.cuda.is_available() else None})
+                    break
+            return
+
+
 # ---- Phase 3a: resume-state inventory at a denoising-step boundary -------------------------
 # Enabled with FT_INVENTORY=1; taken once per request on every rank right after step
 # FT_INVENTORY_STEP (default 2) completes, i.e. when ctx.latents is x_{t-1} at a boundary.
@@ -218,7 +305,13 @@ def _install_step_logger(rank: int) -> None:
 
         def _run_denoising_step(self, ctx, step, batch, server_args, *a, **k):
             t0 = now_ns()
-            r = orig_step(self, ctx, step, batch, server_args, *a, **k)
+            try:
+                r = orig_step(self, ctx, step, batch, server_args, *a, **k)
+            except BaseException as e:
+                steps.write({"ev": "step_exception", "i": getattr(step, "step_index", None), "t0_ns": t0,
+                             "t_ns": now_ns(), "error": repr(e)[:300]})
+                raise
+            _progress_touch()
             try:
                 rec = {"ev": "ds", "i": getattr(step, "step_index", None), "t0_ns": t0, "t_ns": now_ns()}
                 rec.update(_shape_of(batch))
@@ -246,12 +339,19 @@ def _install_step_logger(rank: int) -> None:
 
         def __call__(self, batch, server_args, *a, **k):
             t0 = now_ns()
+            err = None
             try:
                 return orig_call(self, batch, server_args, *a, **k)
+            except BaseException as e:
+                err = repr(e)[:300]
+                raise
             finally:
+                _progress_touch()
                 try:
                     rec = {"ev": "stage", "name": getattr(self, "_registered_stage_name", None) or type(self).__name__,
                            "cls": type(self).__name__, "t0_ns": t0, "t_ns": now_ns()}
+                    if err:
+                        rec["error"] = err
                     rec.update(_shape_of(batch))
                     steps.write(rec)
                 except Exception:
@@ -270,10 +370,16 @@ def _install_step_logger(rank: int) -> None:
         def execute_forward(self, *a, **k):
             t0 = now_ns()
             steps.write({"ev": "req_start", "t_ns": t0})
+            _PROGRESS.update({"in_request": True, "req_start_ns": t0, "last_ns": t0})
+            err = None
             try:
                 return orig_fwd(self, *a, **k)
+            except BaseException as e:
+                err = repr(e)[:300]
+                raise
             finally:
-                steps.write({"ev": "req_end", "t0_ns": t0})
+                _PROGRESS["in_request"] = False
+                steps.write({"ev": "req_end", "t0_ns": t0, "error": err})
 
         GPUWorker.execute_forward = execute_forward
         steps.write({"ev": "hook", "target": "GPUWorker.execute_forward", "ok": True})
@@ -292,6 +398,11 @@ def run_scheduler_process_wrapped(local_rank, rank, master_port, server_args, *a
         _install_step_logger(rank)
     except Exception as e:
         print(f"[ft-detect] step logger install failed: {e!r}", flush=True)
+    if os.environ.get("FT_ABORT_PROBE", "0") == "1":
+        _threading.Thread(target=_abort_probe_thread, args=(JsonlWriter(logs_dir() / f"steps_rank{rank}.jsonl"), rank),
+                          daemon=True, name="ft-abort-probe").start()
+        print(f"[ft-detect] FT_ABORT_PROBE armed on rank{rank}: deadline {os.environ.get('FT_ABORT_DEADLINE_S', '10')}s, "
+              f"mode {os.environ.get('FT_ABORT_MODE', 'all')}", flush=True)
 
     from sglang.multimodal_gen.runtime.managers.gpu_worker import run_scheduler_process
 

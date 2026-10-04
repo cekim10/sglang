@@ -33,6 +33,7 @@ ENGINE_PATTERNS = {
     "nccl_timeout", "nccl_error", "torch_dist_error", "abort", "cuda_error", "scheduler_terminated",
     # sglang.multimodal_gen (diffusion)
     "diff_recv_error", "diff_exec_error", "diff_max_errors", "diff_worker_dead", "diff_worker_shutdown", "diff_ipc_a2a_timeout",
+    "ft_abort_miss", "ft_abort_done",
 }
 NS = 1e9
 

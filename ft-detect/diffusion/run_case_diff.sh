@@ -16,6 +16,10 @@
 #                     lower it (e.g. 900) for the remaining runs if the answer is deterministic.
 #   POST_GRACE        default 300
 #   INJECT_JITTER     default 0
+#   FT_ABORT_PROBE=1  Phase 3c: each rank aborts its torch process groups after FT_ABORT_DEADLINE_S
+#                     (default 10) seconds without progress; containment.py writes the timeline.
+#                     Use with MAX_DETECT_WAIT=120 POST_GRACE=60; TORCH_NCCL_ASYNC_ERROR_HANDLING=0 is
+#                     the documented setting for _abort_process_group (try both).
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); ROOT=$(cd "$HERE/.." && pwd)
 CASE=${1:?case A|B}; RANK=${2:?target rank}; N=${3:?n_runs}
@@ -34,7 +38,7 @@ LOAD_DURATION=$(( MIN_WARMUP + STEADY_WAIT + INJECT_JITTER + MAX_DETECT_WAIT + P
 export FT_API=diffusion
 mkdir -p "$RUNS_DIR" "$RESULTS_DIR"
 
-DETECT_RE='"pattern":"(watchdog_fire|scheduler_exception|subprocess_crashed|sigquit|kill_tree|nccl_timeout|nccl_error|abort|torch_dist_error|cuda_error|scheduler_terminated|diff_recv_error|diff_exec_error|diff_max_errors|diff_worker_dead|diff_worker_shutdown|diff_ipc_a2a_timeout)"|"who":"(http_server|rank0)","pid":[0-9]+,"state":"(dead|zombie)"'
+DETECT_RE='"pattern":"(watchdog_fire|scheduler_exception|subprocess_crashed|sigquit|kill_tree|nccl_timeout|nccl_error|abort|torch_dist_error|cuda_error|scheduler_terminated|diff_recv_error|diff_exec_error|diff_max_errors|diff_worker_dead|diff_worker_shutdown|diff_ipc_a2a_timeout|ft_abort_miss|ft_abort_done)"|"who":"(http_server|rank0)","pid":[0-9]+,"state":"(dead|zombie)"'
 
 cleanup_run() {
   "$PYTHON" "$ROOT/stop.py" || true
@@ -93,6 +97,11 @@ for i in $(seq 1 "$N"); do
 
   cleanup_run
   "$PYTHON" "$ROOT/analyze.py" "$RUN" --gap 60 --csv "$RESULTS_DIR/case${CASE}.csv" --md "$RESULTS_DIR/case${CASE}.md" > "$RUN/logs/analyze.out" 2>&1 || { echo "[analyze FAILED] see $RUN/logs/analyze.out"; tail -5 "$RUN/logs/analyze.out"; }
+  if [ "${FT_ABORT_PROBE:-0}" = "1" ]; then
+    "$PYTHON" "$HERE/containment.py" "$RUN" --md "$RUN/containment.md" --csv "$RUN/containment.csv" > "$RUN/logs/containment.out" 2>&1 \
+      && "$PYTHON" "$HERE/containment.py" "$RUNS_DIR"/diff_${CASE}_r${RANK}_* --md "$RESULTS_DIR/containment_${CASE}.md" --csv "$RESULTS_DIR/containment_${CASE}.csv" > /dev/null 2>&1 \
+      || { echo "[containment FAILED] see $RUN/logs/containment.out"; tail -5 "$RUN/logs/containment.out"; }
+  fi
   sleep 10
 done
 echo "[run_case_diff] done: $RESULTS_DIR/case${CASE}.md"
