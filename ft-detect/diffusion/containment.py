@@ -49,13 +49,15 @@ def analyze_run(run: Path) -> list[dict]:
     except Exception:
         pass
     reqs = [r for r in read_jsonl(run / "requests.jsonl") if "rid" in r and "ev" not in r]
-    probe = read_jsonl(run / "probe.jsonl")
+    stops = [r["t_ns"] for r in read_jsonl(run / "inject.jsonl") if r.get("ev") in ("sigcont", "sigterm", "sigkill", "stopped", "resume")]
+    t_stop = min(stops) if stops else None
+    probe = [r for r in read_jsonl(run / "probe.jsonl") if t_stop is None or r["t_ns"] < t_stop]
     rows = []
     for p in sorted(run.glob("logs/steps_rank*.jsonl")):
         rank = int(p.stem.replace("steps_rank", ""))
         if rank == target:
             continue
-        ev = read_jsonl(p)
+        ev = [r for r in read_jsonl(p) if t_stop is None or r["t_ns"] < t_stop]
         prog = [r["t_ns"] for r in ev if r.get("ev") in ("ds", "stage") and r["t_ns"] < t_inj + int(2 * NS)]
         ap = {r["phase"]: r for r in ev if r.get("ev") == "abort_probe"}
         exc = next((r for r in ev if r.get("ev") == "step_exception" and r["t_ns"] >= t_inj), None)
@@ -91,6 +93,8 @@ def analyze_run(run: Path) -> list[dict]:
             "cuda_mem_after_MiB": round(((idle or ret or {}).get("cuda_mem_alloc") or 0) / 2**20),
             "t_first_client_error": _s(first_err, t_inj),
             "rank_dead_at": _s((alive or {}).get("t_ns"), t_inj),
+            "observed_until": _s(t_stop, t_inj),
+            "abort_still_blocked_at_stop": bool(miss and not ret and t_stop is not None),
             "post_abort_errors": len(post),
             "post_abort_time_to_error_p50_s": round(sorted(post)[len(post) // 2], 2) if post else None,
         })

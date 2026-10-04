@@ -234,7 +234,11 @@ async def amain(a):
                "duration": a.duration, "burst_period": a.burst_period, "burst_factor": a.burst_factor,
                "burst_len": a.burst_len, "url": url, "stack": "sglang-diffusion"})
     rep = asyncio.create_task(reporter(stats, a.report_every))
-    async with httpx.AsyncClient(limits=httpx.Limits(max_connections=512, max_keepalive_connections=512)) as client:
+    # Video jobs poll with low-rate GETs that race uvicorn's 5 s keep-alive expiry and surface as
+    # "Server disconnected without sending a response"; close connections per request instead.
+    headers = {"Connection": "close"} if a.video else None
+    async with httpx.AsyncClient(limits=httpx.Limits(max_connections=512, max_keepalive_connections=0 if a.video else 512),
+                                 headers=headers) as client:
         if a.per_shape:
             await per_shape(a, client, url, out, stats, rng, profile)
         elif a.closed_loop:
