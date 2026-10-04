@@ -1,0 +1,6 @@
+model,shape,pixels_frames,steps,requests,step_p50_ms,step_p99_ms,step_p999_ms,step_max_ms,gap_max_ms,warm_steps,warm_q_ms,warm_max_ms,max_first_after_launch_ms,max_first_of_shape_ms,max_after_idle_ms,D_w_step_s,D_w_all_s,stage_warm_max_ms,stage_warm_name,stage_cold_max_ms,D_w_stage_s,D_w_s,D_w_quantum,slack_x
+Wan-AI/Wan2.2-TI2V-5B-Diffusers,512x512,262144,36,2,84.7,2425.0,2687.3,2716.5,109.3,18,88.7,88.7,2716.5,,,0.177,5.433,431.1,TextEncodingStage,2325.9,0.862,0.862,TextEncodingStage,29.7
+Wan-AI/Wan2.2-TI2V-5B-Diffusers,832x480x17f,6789120,36,2,167.4,171.9,171.9,171.9,184.8,18,171.9,171.9,,171.6,,0.344,0.37,1219.3,decoding_stage,,2.439,2.439,decoding_stage,10.5
+Wan-AI/Wan2.2-TI2V-5B-Diffusers,832x480x81f,32348160,36,2,705.0,727.3,727.4,727.4,756.8,18,727.4,727.4,,722.4,,1.455,1.514,5973.1,decoding_stage,,11.946,11.946,decoding_stage,2.1
+Wan-AI/Wan2.2-TI2V-5B-Diffusers,832x480x85f,33945600,36,2,765.9,789.2,789.3,789.3,822.0,18,789.3,789.3,,786.8,,1.579,1.644,6253.0,decoding_stage,,12.506,12.506,decoding_stage,2.0
+Wan-AI/Wan2.2-TI2V-5B-Diffusers,1280x704x81f,72990720,36,2,2034.7,2095.0,2095.0,2095.0,2152.4,18,2095.0,2095.0,,2092.2,,4.19,4.305,12780.5,decoding_stage,,25.561,25.561,decoding_stage,1.0

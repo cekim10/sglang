@@ -1,0 +1,3 @@
+model,shape,pixels_frames,steps,requests,step_p50_ms,step_p99_ms,step_p999_ms,step_max_ms,gap_max_ms,warm_steps,warm_q_ms,warm_max_ms,max_first_after_launch_ms,max_first_of_shape_ms,max_after_idle_ms,D_w_step_s,D_w_all_s,stage_warm_max_ms,stage_warm_name,stage_cold_max_ms,D_w_stage_s,D_w_s,D_w_quantum,slack_x
+Tongyi-MAI/Z-Image-Turbo,512x512,262144,36,2,63.9,239.9,241.1,241.2,70.5,18,66.6,66.6,241.2,,,0.133,0.482,267.8,TextEncodingStage,1648.9,0.536,0.536,TextEncodingStage,3.4
+Tongyi-MAI/Z-Image-Turbo,1536x1536,2359296,36,2,526.3,528.4,528.4,528.4,530.1,18,527.6,527.6,,528.4,,1.055,1.06,906.2,decoding_stage,,1.812,1.812,decoding_stage,1.0

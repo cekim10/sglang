@@ -1,0 +1,6 @@
+model,shape,requests,ranks_seen,step_index,n_steps,latents_shape,latents_dtype,sharded_flag,latents_identical_across_ranks,scheduler,latents_MiB,solver_history_MiB,conditioning_MiB,generator_state_bytes,S_state_MiB,serialized_MiB,T_pin_ms,T_save_ms,recovery_source,warm_step_ms,T_pin_over_step_pct
+Wan-AI/Wan2.2-TI2V-5B-Diffusers,1280x704x81f,2,2,2,9,1x48x21x44x80,float32,False,True,FlowUniPCMultistepScheduler,13.535,40.605,16.009,16.0,70.149,70.154,22.3,64.49,survivor holds full x_t,2034.7129075,1.1
+Wan-AI/Wan2.2-TI2V-5B-Diffusers,512x512,2,2,2,9,1x48x1x32x32,float32,False,True,FlowUniPCMultistepScheduler,0.188,0.563,16.009,16.0,16.759,16.763,5.395,12.94,survivor holds full x_t,84.6797055,6.37
+Wan-AI/Wan2.2-TI2V-5B-Diffusers,832x480x17f,2,2,2,9,1x48x5x30x52,float32,False,True,FlowUniPCMultistepScheduler,1.428,4.285,16.009,16.0,21.722,21.726,2.025,11.965,survivor holds full x_t,167.376869,1.21
+Wan-AI/Wan2.2-TI2V-5B-Diffusers,832x480x81f,2,2,2,9,1x48x21x30x52,float32,False,True,FlowUniPCMultistepScheduler,5.999,17.996,16.009,16.0,40.003,40.008,10.51,33.795,survivor holds full x_t,704.9911930000001,1.49
+Wan-AI/Wan2.2-TI2V-5B-Diffusers,832x480x85f,2,2,2,9,1x48x22x30x52,float32,False,True,FlowUniPCMultistepScheduler,6.284,18.853,16.009,16.0,41.146,41.15,1.94,43.335,survivor holds full x_t,765.9316805,0.25

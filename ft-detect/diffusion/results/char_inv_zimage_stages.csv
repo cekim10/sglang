@@ -1,0 +1,11 @@
+model,shape,stage,n,p50_ms,max_ms
+Tongyi-MAI/Z-Image-Turbo,1536x1536,InputValidationStage,4,0.1,0.2
+Tongyi-MAI/Z-Image-Turbo,1536x1536,LatentPreparationStage,4,5.9,5.9
+Tongyi-MAI/Z-Image-Turbo,1536x1536,TextEncodingStage,4,288.2,323.9
+Tongyi-MAI/Z-Image-Turbo,1536x1536,TimestepPreparationStage,4,0.5,0.5
+Tongyi-MAI/Z-Image-Turbo,1536x1536,decoding_stage,4,902.9,906.2
+Tongyi-MAI/Z-Image-Turbo,512x512,InputValidationStage,4,0.4,0.9
+Tongyi-MAI/Z-Image-Turbo,512x512,LatentPreparationStage,4,3.4,6.0
+Tongyi-MAI/Z-Image-Turbo,512x512,TextEncodingStage,4,956.8,1648.9
+Tongyi-MAI/Z-Image-Turbo,512x512,TimestepPreparationStage,4,0.6,0.8
+Tongyi-MAI/Z-Image-Turbo,512x512,decoding_stage,4,67.8,137.6

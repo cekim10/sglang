@@ -1,0 +1,8 @@
+Resume-state inventory at the boundary after denoising step FT_INVENTORY_STEP (per workload, median over requests).
+
+| model | shape | requests | ranks_seen | step_index | n_steps | latents_shape | latents_dtype | sharded_flag | latents_identical_across_ranks | scheduler | latents_MiB | solver_history_MiB | conditioning_MiB | generator_state_bytes | S_state_MiB | serialized_MiB | T_pin_ms | T_save_ms | recovery_source | warm_step_ms | T_pin_over_step_pct |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Tongyi-MAI/Z-Image-Turbo | 1536x1536 | 2 | 2 | 2 | 9 | 1x16x1x96x192 | bfloat16 | True | False | FlowMatchEulerDiscreteScheduler | 0.562 | 0.0 | 0.366 | 16.0 | 0.929 | 0.931 | 0.14 | 0.76 | sharded: needs peer's shard | 526.321239 | 0.03 |
+| Tongyi-MAI/Z-Image-Turbo | 512x512 | 2 | 2 | 2 | 9 | 1x16x1x32x64 | bfloat16 | True | False | FlowMatchEulerDiscreteScheduler | 0.062 | 0.0 | 0.403 | 16.0 | 0.465 | 0.468 | 0.185 | 2.12 | sharded: needs peer's shard | 63.8661995 | 0.29 |
+
+`S_state` = latents + solver history + conditioning + generator state on the serving rank; `T_pin` = device to pinned host copy of that bundle; `T_save` = torch.save of the host copy. `recovery_source` says whether a surviving SP rank already holds the full latent (replicated) or only a shard.
