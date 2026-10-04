@@ -79,7 +79,14 @@ def _abort_all_groups(log) -> dict:
     if not dist.is_initialized():
         out["error"] = "torch.distributed not initialized"
         return out
-    mode = os.environ.get("FT_ABORT_MODE", "all")   # all | sp | world
+    mode = os.environ.get("FT_ABORT_MODE", "all")   # all | sp | world | exit
+    if mode == "exit":
+        # process-level containment: give up on the collective and leave; measures how fast the
+        # GPU is released and how the peer / HTTP side react to a vanished rank
+        out["attempts"].append({"group": "exit", "how": "os._exit(3)", "ok": True, "t0_ns": now_ns(), "t_ns": now_ns()})
+        log("[ft-detect] FT_ABORT_PROBE abort returned after 0.0 ms: exiting rank process (FT_ABORT_MODE=exit)")
+        sys.stdout.flush()
+        os._exit(3)
     groups = []
     if mode in ("sp", "world"):
         try:
@@ -123,6 +130,9 @@ def _abort_probe_thread(steps: "JsonlWriter", rank: int) -> None:
             print(f"[ft-detect] FT_ABORT_PROBE deadline miss: no progress for {deadline_s}s (rank{rank}); aborting process groups", flush=True)
             steps.write({"ev": "abort_probe", "phase": "deadline_miss", "deadline_s": deadline_s, "t_ns": t_miss,
                          "last_progress_ns": last, "cuda_mem_alloc": mem0})
+            if os.environ.get("FT_ABORT_MODE", "all") == "exit":
+                steps.write({"ev": "abort_probe", "phase": "abort_returned", "t_ns": now_ns(),
+                             "result": {"attempts": [{"group": "exit", "how": "os._exit(3)", "ok": True}]}, "cuda_mem_alloc": mem0})
             res = _abort_all_groups(print)
             t_ret = now_ns()
             print(f"[ft-detect] FT_ABORT_PROBE abort returned after {(t_ret - t_miss) / 1e6:.1f} ms: {res}", flush=True)

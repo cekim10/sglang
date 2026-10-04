@@ -140,3 +140,13 @@ fails, the rank lives and later requests fail fast -> containment is bounded by 
 (b) abort returns but the main thread stays blocked (kernel spinning) -> containment needs a
 different primitive; (c) the rank dies (torch async error handling tears it down) -> containment
 equals restart. The SIGSTOPped peer is SIGCONTed by stop.py at the end of the run.
+
+Variants after the first result (in-process `_abort_process_group` never returned; the rank was
+terminated ~60 s later by torch's own abort/dump timeout):
+
+```bash
+# NCCL non-blocking communicators: does abort return now?
+TORCH_NCCL_USE_COMM_NONBLOCKING=1 FT_ABORT_PROBE=1 FT_ABORT_DEADLINE_S=10 MIN_WARMUP=45 STEADY_WAIT=60 MAX_DETECT_WAIT=120 POST_GRACE=60 ./run_case_diff.sh B 1 2
+# process-level containment floor: the rank exits at the deadline instead of aborting
+FT_ABORT_MODE=exit FT_ABORT_PROBE=1 FT_ABORT_DEADLINE_S=10 MIN_WARMUP=45 STEADY_WAIT=60 MAX_DETECT_WAIT=120 POST_GRACE=60 ./run_case_diff.sh B 1 2
+```
