@@ -79,6 +79,29 @@ def _install_step_logger(rank: int) -> None:
         steps.write({"ev": "hook", "target": "DenoisingStage._run_denoising_step", "ok": False, "error": repr(e)})
 
     try:
+        from sglang.multimodal_gen.runtime.pipelines_core.stages.base import PipelineStage
+
+        orig_call = PipelineStage.__call__
+
+        def __call__(self, batch, server_args, *a, **k):
+            t0 = now_ns()
+            try:
+                return orig_call(self, batch, server_args, *a, **k)
+            finally:
+                try:
+                    rec = {"ev": "stage", "name": getattr(self, "_registered_stage_name", None) or type(self).__name__,
+                           "cls": type(self).__name__, "t0_ns": t0, "t_ns": now_ns()}
+                    rec.update(_shape_of(batch))
+                    steps.write(rec)
+                except Exception:
+                    pass
+
+        PipelineStage.__call__ = __call__
+        steps.write({"ev": "hook", "target": "PipelineStage.__call__", "ok": True})
+    except Exception as e:
+        steps.write({"ev": "hook", "target": "PipelineStage.__call__", "ok": False, "error": repr(e)})
+
+    try:
         from sglang.multimodal_gen.runtime.managers.gpu_worker import GPUWorker
 
         orig_fwd = GPUWorker.execute_forward

@@ -72,3 +72,28 @@ Tongyi-MAI/Z-Image-Turbo (6B, Apache, ~8 steps, smallest download, in the cookbo
 - `n_inflight_hung` is small by construction (no batching: one running request plus the queue).
 - The floor has two meanings: the swept RPC/dist timeouts (request-level), and the hypothetical step-watchdog
   floor from `step_stats.py` (what Phase 1 measured directly for the LLM). The second is the Phase 2 result.
+
+## Workload-variability characterization (the kill-test input, no fault injection)
+
+Question: is there one static step timeout that is both fast and false-positive-free across
+image and video workloads? `characterize.sh` runs a shape matrix on one model, N sequential
+requests per shape (first = cold sample), and records every denoising step and every pipeline
+stage with the request's shape. `step_stats.py` turns that into per-workload deadlines
+(`D_w = 2 x p99.9(warm step)`), cold-start maxima by cause, and the non-denoising stage table;
+`merge_floor.py` merges models into one `D_global / D_w` table and a log-axis chart.
+
+```bash
+# image (Z-Image-Turbo, 9 steps)
+SHAPES="256x256@9,512x512@9,1024x1024@9,1536x1536@9" PER_SHAPE=5 IDLE_PROBE=120 ./characterize.sh zimage
+
+# video (Wan; frame counts must be 4k+1; 480p and 720p; short / medium / long)
+export MODEL=Wan-AI/Wan2.2-TI2V-5B-Diffusers            # fits 2x48 GB without offload; A14B needs --dit-cpu-offload
+SHAPES="832x480x17@30,832x480x49@30,832x480x81@30,1280x720x17@30,1280x720x49@30,1280x720x81@30" PER_SHAPE=3 ./characterize.sh wan22
+
+python merge_floor.py results/char_*.csv --md results/floor_merged.md
+```
+
+Video requests go through `POST /v1/videos` (multipart form, returns a queued job) and are
+polled on `GET /v1/videos/{id}` until `completed`/`failed`; `--shapes` with a frame count
+switches the generator to that path automatically. Add `--fps` via `LOAD_ARGS` if the model's
+default fps/seconds mapping matters.
