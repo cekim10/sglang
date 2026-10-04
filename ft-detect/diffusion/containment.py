@@ -97,6 +97,34 @@ def analyze_run(run: Path) -> list[dict]:
     return rows
 
 
+def print_events(run: Path, window_s: float = 200.0) -> None:
+    """Raw per-rank event timeline around t_inject, plus matching log lines and pid states."""
+    import re
+    import subprocess
+
+    injs = [r for r in read_jsonl(run / "inject.jsonl") if r.get("ev") == "inject"]
+    if not injs:
+        print(f"{run}: no injection"); return
+    t = injs[0]["t_ns"]
+    print(f"=== {run.name} (t_inject = 0; window -5..+{window_s:.0f} s) ===")
+    for p in sorted(run.glob("logs/steps_rank*.jsonl")):
+        for r in read_jsonl(p):
+            if r.get("ev") in ("req_start", "req_end", "step_exception", "abort_probe", "inventory_error") \
+                    and t - 5 * NS < r["t_ns"] < t + window_s * NS:
+                print(f"  {p.stem[-5:]} {(r['t_ns'] - t) / NS:+9.3f}s {r['ev']:15s} {r.get('phase', '') or ''} {(r.get('error') or '')[:110]}")
+    rx = re.compile(r"Error executing|DistBackendError|Watchdog caught|terminate|NONBLOCKING|nonblocking|Timeout\(ms\)|FT_ABORT_PROBE|Abort|abort")
+    for p in sorted(run.glob("logs/rank*.log")):
+        hits = [l.rstrip()[:200] for l in open(p, errors="replace") if rx.search(l) and not l.startswith("frame #")]
+        for l in hits[-8:]:
+            print(f"  {p.name}: {l}")
+    for r in read_jsonl(run / "probe.jsonl"):
+        if r.get("ev") == "pid" and r.get("state") != "alive" and r["t_ns"] >= t - 5 * NS:
+            print(f"  probe {(r['t_ns'] - t) / NS:+9.3f}s {r['who']} -> {r['state']}")
+    reqs = [r for r in read_jsonl(run / "requests.jsonl") if "rid" in r and "ev" not in r and r.get("error")]
+    for r in sorted(reqs, key=lambda r: r["send_ts"])[:3]:
+        print(f"  first client errors: sent {(r['send_ts'] - t) / NS:+8.3f}s ended {((r['last_chunk_ts'] or r['send_ts']) - t) / NS:+8.3f}s {str(r['error'])[:100]}")
+
+
 def md_table(df: pd.DataFrame) -> str:
     if df is None or df.empty:
         return "_no containment data (run with FT_ABORT_PROBE=1 and an injection)_"
@@ -112,7 +140,13 @@ def main():
     ap.add_argument("runs", nargs="+")
     ap.add_argument("--md", default=None)
     ap.add_argument("--csv", default=None)
+    ap.add_argument("--events", action="store_true", help="print the raw event timeline per run instead of the table")
     a = ap.parse_args()
+    if a.events:
+        for r in a.runs:
+            if Path(r).is_dir():
+                print_events(Path(r))
+        return 0
     rows = []
     for r in a.runs:
         if Path(r).is_dir():
