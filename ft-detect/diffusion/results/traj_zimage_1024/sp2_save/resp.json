@@ -1,0 +1,10 @@
+{
+ "shape": "1024x1024",
+ "steps": 9,
+ "seed": 1234,
+ "prompt": "a red fox running through fresh snow, cinematic lighting, high detail",
+ "status": 200,
+ "sha256": "18feade70281333767c24e92f1d3a9725ad1447e39a542fcaa082607756ded90",
+ "bytes": 74387,
+ "latency_s": 4.560227238
+}

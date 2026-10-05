@@ -1,0 +1,13 @@
+{
+ "shape": "832x480x81",
+ "steps": 9,
+ "seed": 1234,
+ "prompt": "a red fox running through fresh snow, cinematic lighting, high detail",
+ "status": 200,
+ "job_id": "d61a119e-4063-42d2-829b-a16cdd645d6d",
+ "job_status": "completed",
+ "content_status": 200,
+ "sha256": "d66d319784553dd8d717658f3e7c21dcfe34e819262dc12948960d289f647b9e",
+ "bytes": 153260,
+ "latency_s": 47.31392339
+}
