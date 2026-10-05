@@ -50,7 +50,11 @@ def main():
             if r.status_code == 200:
                 job = r.json()
                 rec["job_id"] = job.get("id")
+                t_poll = time.monotonic()
                 while job.get("status") not in ("completed", "failed"):
+                    if time.monotonic() - t_poll > a.timeout:
+                        job = {"status": "timeout", "error": f"job not finished after {a.timeout:.0f}s (last status {job.get('status')})"}
+                        break
                     time.sleep(0.5)
                     job = c.get(f"{base}/v1/videos/{rec['job_id']}").json()
                 rec["job_status"] = job.get("status")
