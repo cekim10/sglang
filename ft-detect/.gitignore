@@ -5,3 +5,6 @@ __pycache__/
 # the repo root ignores *.csv; the result tables must travel with the report
 !results/*.csv
 !diffusion/results/*.csv
+
+# trajectory checkpoints are tens of MiB each; keep them out of the repo
+*.pt

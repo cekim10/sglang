@@ -1,0 +1,182 @@
+{
+ "workloads": {
+  "Wan-AI/Wan2.2-TI2V-5B-Diffusers|512x512": {
+   "model": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+   "shape": "512x512",
+   "pixels_frames": 262144.0,
+   "q_sp2_ms": 120.3,
+   "step_p50_sp2_ms": 83.8,
+   "decode_sp2_ms": 15.0,
+   "encode_ms": 509.6,
+   "state_MiB": 16.759,
+   "t_pin_ms": 5.395,
+   "dynamic_state_MiB": 0.7509999999999999
+  },
+  "Wan-AI/Wan2.2-TI2V-5B-Diffusers|832x480x17f": {
+   "model": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+   "shape": "832x480x17f",
+   "pixels_frames": 6789120.0,
+   "q_sp2_ms": 171.8,
+   "step_p50_sp2_ms": 167.3,
+   "decode_sp2_ms": 1210.5,
+   "encode_ms": 442.0,
+   "state_MiB": 21.722,
+   "t_pin_ms": 2.025,
+   "dynamic_state_MiB": 5.713
+  },
+  "Wan-AI/Wan2.2-TI2V-5B-Diffusers|832x480x81f": {
+   "model": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+   "shape": "832x480x81f",
+   "pixels_frames": 32348160.0,
+   "q_sp2_ms": 731.5,
+   "step_p50_sp2_ms": 711.6,
+   "decode_sp2_ms": 5960.8,
+   "encode_ms": 433.8,
+   "state_MiB": 40.003,
+   "t_pin_ms": 10.51,
+   "dynamic_state_MiB": 23.994999999999997,
+   "q_sp1_ms": 1198.3
+  },
+  "Wan-AI/Wan2.2-TI2V-5B-Diffusers|832x480x85f": {
+   "model": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+   "shape": "832x480x85f",
+   "pixels_frames": 33945600.0,
+   "q_sp2_ms": 789.3,
+   "step_p50_sp2_ms": 765.9,
+   "decode_sp2_ms": 6250.6,
+   "encode_ms": 434.9,
+   "state_MiB": 41.146,
+   "t_pin_ms": 1.94,
+   "dynamic_state_MiB": 25.137
+  },
+  "Wan-AI/Wan2.2-TI2V-5B-Diffusers|1280x704x81f": {
+   "model": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+   "shape": "1280x704x81f",
+   "pixels_frames": 72990720.0,
+   "q_sp2_ms": 2105.5,
+   "step_p50_sp2_ms": 2047.5,
+   "decode_sp2_ms": 12733.3,
+   "encode_ms": 440.9,
+   "state_MiB": 70.149,
+   "t_pin_ms": 22.3,
+   "dynamic_state_MiB": 54.14
+  },
+  "Tongyi-MAI/Z-Image-Turbo|256x256": {
+   "model": "Tongyi-MAI/Z-Image-Turbo",
+   "shape": "256x256",
+   "pixels_frames": 65536.0,
+   "q_sp2_ms": 45.5,
+   "step_p50_sp2_ms": 42.5,
+   "decode_sp2_ms": 7.0,
+   "encode_ms": 267.0
+  },
+  "Tongyi-MAI/Z-Image-Turbo|512x512": {
+   "model": "Tongyi-MAI/Z-Image-Turbo",
+   "shape": "512x512",
+   "pixels_frames": 262144.0,
+   "q_sp2_ms": 66.6,
+   "step_p50_sp2_ms": 63.9,
+   "decode_sp2_ms": 67.8,
+   "encode_ms": 956.8,
+   "state_MiB": 0.465,
+   "t_pin_ms": 0.185,
+   "dynamic_state_MiB": 0.062
+  },
+  "Tongyi-MAI/Z-Image-Turbo|1024x1024": {
+   "model": "Tongyi-MAI/Z-Image-Turbo",
+   "shape": "1024x1024",
+   "pixels_frames": 1048576.0,
+   "q_sp2_ms": 221.3,
+   "step_p50_sp2_ms": 218.9,
+   "decode_sp2_ms": 54.5,
+   "encode_ms": 319.9,
+   "q_sp1_ms": 295.0
+  },
+  "Tongyi-MAI/Z-Image-Turbo|1536x1536": {
+   "model": "Tongyi-MAI/Z-Image-Turbo",
+   "shape": "1536x1536",
+   "pixels_frames": 2359296.0,
+   "q_sp2_ms": 527.6,
+   "step_p50_sp2_ms": 526.3,
+   "decode_sp2_ms": 902.9,
+   "encode_ms": 288.2,
+   "state_MiB": 0.929,
+   "t_pin_ms": 0.14,
+   "dynamic_state_MiB": 0.562
+  },
+  "Wan-AI/Wan2.2-TI2V-5B-Diffusers|832x480x49f": {
+   "model": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+   "shape": "832x480x49f",
+   "pixels_frames": 19568640.0,
+   "q_sp2_ms": 429.7,
+   "step_p50_sp2_ms": 418.4,
+   "decode_sp2_ms": 3629.4,
+   "encode_ms": 435.1
+  },
+  "Wan-AI/Wan2.2-TI2V-5B-Diffusers|1024x1024": {
+   "model": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+   "shape": "1024x1024",
+   "pixels_frames": 1048576.0,
+   "q_sp2_ms": 118.5,
+   "step_p50_sp2_ms": 92.9,
+   "decode_sp2_ms": 29.8,
+   "encode_ms": 511.1
+  },
+  "Wan-AI/Wan2.2-TI2V-5B-Diffusers|1536x1536": {
+   "model": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+   "shape": "1536x1536",
+   "pixels_frames": 2359296.0,
+   "q_sp2_ms": 202.4,
+   "step_p50_sp2_ms": 195.4,
+   "decode_sp2_ms": 531.4,
+   "encode_ms": 510.2
+  },
+  "Wan-AI/Wan2.2-TI2V-5B-Diffusers|1280x704x17f": {
+   "model": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+   "shape": "1280x704x17f",
+   "pixels_frames": 15319040.0,
+   "q_sp2_ms": 388.4,
+   "step_p50_sp2_ms": 378.1,
+   "decode_sp2_ms": 2723.7,
+   "encode_ms": 434.4
+  },
+  "Wan-AI/Wan2.2-TI2V-5B-Diffusers|1280x704x49f": {
+   "model": "Wan-AI/Wan2.2-TI2V-5B-Diffusers",
+   "shape": "1280x704x49f",
+   "pixels_frames": 44154880.0,
+   "q_sp2_ms": 1081.7,
+   "step_p50_sp2_ms": 1050.8,
+   "decode_sp2_ms": 7731.7,
+   "encode_ms": 442.7
+  }
+ },
+ "models": {
+  "Wan-AI/Wan2.2-TI2V-5B-Diffusers": {
+   "restart": {
+    "spawn_import_s": 8.7,
+    "load_s": 22.0,
+    "warmup_s": 1.09,
+    "ready_s": 37.0
+   },
+   "q_sp1_over_sp2": 1.7118571428571427
+  },
+  "Tongyi-MAI/Z-Image-Turbo": {
+   "restart": {
+    "spawn_import_s": 8.64,
+    "load_s": 15.0,
+    "warmup_s": 1.17,
+    "ready_s": 24.6
+   },
+   "q_sp1_over_sp2": 1.3318284424379232
+  }
+ },
+ "notes": [
+  "q_sp1 for workloads without an SP=1 run is extrapolated with the model's median SP1/SP2 ratio (flagged in the model output).",
+  "local run: q_sp1 for 1024^2 and 480p x 81 inserted from compare.md; other shapes extrapolated by model ratio"
+ ],
+ "fence_exit_s": {
+  "min": 0.10899999999999999,
+  "max": 8.336
+ },
+ "gpu_total_MiB": 45458
+}
