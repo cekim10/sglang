@@ -350,3 +350,24 @@ Conditions and limits: one failure mode (SIGSTOP between steps), one model and s
 without NVLink; after the failover the process stays at SP=1 (no re-expansion); aborting every
 group hangs in this layout (not yet attributed, see the abort matrix); the 1.2-1.6 s switch is
 dominated by three heap scans that could be done once at startup.
+
+## Cluster oracle: restart vs trajectory migration vs in-place degradation (computation only)
+
+`cluster_oracle.py` simulates R replicas x SP=N serving the measured Wan video mix at 50 steps, one
+GPU failure per event, the same 5 s detection for every policy, and compares, against the same
+arrivals without a failure: P1 retry + restart, P2 migrate the trajectory + restart (the strongest
+baseline; survivors restart at SP=N-1 after a hard failure), P3 in-place SP=N -> SP=N-1, P3i the same
+with re-expansion only when idle. Restart time is swept (40 s measured for 5B, up to 15 min), with
+hard and transient failures, rho 0.3-0.9, and a fleet view over per-GPU failure rates.
+
+```bash
+python cluster_oracle.py --seeds 40                                  # results/cluster_oracle.md
+python cluster_oracle.py --seeds 40 --mix long-video --md results/cluster_oracle_longvideo.md --csv results/cluster_oracle_longvideo.csv
+python cluster_oracle.py --seeds 40 --scaling perfect --md results/cluster_oracle_perfect_scaling.md --csv results/cluster_oracle_perfect_scaling.csv
+```
+
+Result (2026-10-05): GRAY in all three variants under the gate fixed before the run. In-place
+degradation helps only for hard failures at high load with slow restarts; at the measured 40 s
+restart it is within 10-15% of migration + restart. At hardware failure rates the failure-attributable
+SLO violations are below 1e-4 of requests for every detected policy; the 600 s non-detection of the
+stock stack causes several times more damage than any detected policy.
