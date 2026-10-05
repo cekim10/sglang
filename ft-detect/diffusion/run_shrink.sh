@@ -7,7 +7,8 @@
 # Env: BACKEND nccl|gloo, SHAPE wan|small|cpu, STEPS 10, FAIL_STEP 4, DEADLINE_S 5, MAX_S 300, MASTER_PORT 29561,
 #      OUT_DIR (default results/shrink_<backend>_<shape>). For two machines also export the network
 #      settings that made xnode_a2a_check.py work (LD_PRELOAD=.../mss_clamp.so NCCL_IB_DISABLE=1
-#      NCCL_SOCKET_IFNAME=... NCCL_P2P_DISABLE=1).
+#      NCCL_SOCKET_IFNAME=... GLOO_SOCKET_IFNAME=... NCCL_P2P_DISABLE=1). gloo resolves the short
+#      hostname otherwise, which Ubuntu maps to 127.0.1.1, and the other machine cannot connect.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 BACKEND=${BACKEND:-nccl}; SHAPE=${SHAPE:-wan}; NPROC=${NPROC:-2}; NNODES=${NNODES:-1}; NODE_RANK=${NODE_RANK:-0}
@@ -25,4 +26,4 @@ for l in $(seq 0 $(( NPROC - 1 ))); do
 done
 echo "[run_shrink] node $NODE_RANK: ranks $(( NODE_RANK * NPROC ))..$(( NODE_RANK * NPROC + NPROC - 1 )) of $WORLD; logs in $OUT"
 for p in "${pids[@]}"; do wait "$p"; done
-grep -h -E "references|deadline_miss|abort_done|membership|survivor_group|result|fenced|watchdog|Error|error" "$OUT"/rank*.log | cut -c1-600
+grep -h -E "gloo_check|references|deadline_miss|abort_done|membership|survivor_group|result|fenced|watchdog|Error|error" "$OUT"/rank*.log | cut -c1-600

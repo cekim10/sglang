@@ -130,8 +130,11 @@ def survivor_group(members, backend, dev):
         except Exception as e:
             log("unbind_failed", error=repr(e)[:200])
     try:
+        log("survivor_group.device_group_begin", unbound=unbound)
         dev_group = dist.new_group(members, backend=backend, use_local_synchronization=True)
+        log("survivor_group.device_group_created")
         cpu_group = dist.new_group(members, backend="gloo", use_local_synchronization=True)
+        log("survivor_group.cpu_group_created")
     finally:
         if unbound:
             dpg.bound_device_id = saved
@@ -176,6 +179,17 @@ def main():
     gen = torch.Generator(device=dev).manual_seed(1234)
     layers = [Layer(cfg["hidden"], cfg["heads"], dev, dtype, gen) for _ in range(cfg["layers"])]
     x0 = torch.randn(cfg["tokens"], cfg["hidden"], generator=gen, device=dev, dtype=torch.float32).to(dtype)
+    # gloo between machines must work before the failure (it carries the scheduler's request fan-out)
+    t = time.perf_counter()
+    g_cpu_all = dist.new_group(list(range(world)), backend="gloo")
+    w = dist.barrier(group=g_cpu_all, async_op=True)
+    try:
+        _wait(w, 60.0, "gloo barrier across all ranks")
+        log("gloo_check_ok", s=round(time.perf_counter() - t, 3), gloo_ifname=os.environ.get("GLOO_SOCKET_IFNAME"))
+    except Deadline as e:
+        log("gloo_check_failed", msg=str(e), gloo_ifname=os.environ.get("GLOO_SOCKET_IFNAME"),
+            hint="set GLOO_SOCKET_IFNAME to the interface that carries the inter-node address")
+        dump("gloo_check_failed"); os._exit(4)
     g4 = dist.new_group(list(range(world)), backend=a.backend)            # the SP group, split from the default
     g3_ref = dist.new_group(list(range(world - 1)), backend=a.backend)    # reference only, made while all are alive
     log("init", backend=a.backend, cfg=cfg, host=res["host"])
