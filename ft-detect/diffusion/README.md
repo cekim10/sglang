@@ -326,3 +326,27 @@ caches keyed on group identity or shape. The report now checks the decoded video
 height x width and mean abs pixel difference against the SP=1 reference, needs imageio).
 Two classes of state therefore exist: weight-sharded components cannot shrink in place (replicate
 them), while activation-parallel components can, if every cached degree is found and reset.
+
+### Test 3 result (2026-10-05): PASS, 3 of 3 runs
+
+Wan2.2-TI2V-5B, 832x480x81, 9 steps, SP=2 on 2x L40S (SHM transport); rank 1 SIGSTOPs at step 4;
+`--encoder-parallel replicate`, fence first, abort of the stuck group only, 5 s deadline.
+
+| | per run (3 runs) |
+|---|---|
+| freeze to deadline miss | 5.00 s |
+| abort of the stuck group | 0.09-0.44 s |
+| miss to SP=1 ready (fence, abort, shrink, cached-state reset) | 1.2-1.6 s |
+| failed step re-run at SP=1 | 0.50-0.52 s |
+| failing request latency (normal SP=2 request: 15.1 s) | 32.8 s |
+| next request, same process at SP=1 | 23.7-24.2 s |
+| final latents vs SP=1 and SP=2 references | identical (rel. error 0) |
+| decoded video vs SP=1 reference | same 81x480x832; mean abs pixel diff 1.273 (SP=2 reference: 1.274) |
+
+Measured alternatives on this host: stock SGLang loses the request (600 s to the torch watchdog,
+replica never evicted); a restart at SP=1 needs 43 s to ready and 46.9 s for its first request
+(sp1ref run), on top of detection, and the in-flight request is lost.
+Conditions and limits: one failure mode (SIGSTOP between steps), one model and shape, two GPUs
+without NVLink; after the failover the process stays at SP=1 (no re-expansion); aborting every
+group hangs in this layout (not yet attributed, see the abort matrix); the 1.2-1.6 s switch is
+dominated by three heap scans that could be done once at startup.
