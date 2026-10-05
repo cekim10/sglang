@@ -72,12 +72,21 @@ def _progress_touch():
 _COEXIST = {"bufs": None, "stream": None}
 
 
+def _main_thread_stack() -> str:
+    import threading
+    import traceback
+
+    frames = sys._current_frames()
+    main_id = threading.main_thread().ident
+    f = frames.get(main_id)
+    return "".join(traceback.format_stack(f)[-12:]) if f is not None else "<no main frame>"
+
+
 def _side_stream_bench(n_iter: int = 30, size: int = 4096, log=None, reuse: bool = True) -> dict:
-    """bf16 matmul + elementwise on a side CUDA stream, synchronised with stream events only
-    (a device-wide synchronize would wait on the stuck NCCL kernel too). Every blocking call is
-    announced through `log` first, so a hang can be attributed to allocation, launch or sync.
-    With reuse=True the buffers and the stream come from the baseline run (no cudaMalloc /
-    cudaHostAlloc during the hang)."""
+    """Independent GPU work on a side CUDA stream while the main thread may be stuck, in phases
+    that separate the suspects: (A) in-place kernel on a pre-allocated buffer (no allocator, one
+    launch), (B) matmul into a pre-allocated output (cuBLAS, no allocator), (C) fresh allocation.
+    Every blocking call is announced through `log` first. Synchronisation is per-stream-event only."""
     import torch
 
     if not torch.cuda.is_available():
@@ -87,30 +96,34 @@ def _side_stream_bench(n_iter: int = 30, size: int = 4096, log=None, reuse: bool
     out = {}
     tw = time.perf_counter
     if reuse and _COEXIST["bufs"] is not None:
-        stream = _COEXIST["stream"]; a, b, d, h = _COEXIST["bufs"]; out["buffers"] = "reused"
+        stream = _COEXIST["stream"]; a, b, c, d, h = _COEXIST["bufs"]; out["buffers"] = "reused"
     else:
         say("coexist: creating stream"); stream = torch.cuda.Stream(device=dev)
         with torch.cuda.stream(stream):
-            say("coexist: cudaMalloc a,b"); t = tw(); a = torch.randn(size, size, device=dev, dtype=torch.bfloat16); b = torch.randn(size, size, device=dev, dtype=torch.bfloat16)
-            out["alloc_ab_ms"] = (tw() - t) * 1e3
+            say("coexist: cudaMalloc a,b,c"); t = tw()
+            a = torch.randn(size, size, device=dev, dtype=torch.bfloat16); b = torch.randn(size, size, device=dev, dtype=torch.bfloat16)
+            c = torch.empty(size, size, device=dev, dtype=torch.bfloat16); out["alloc_abc_ms"] = (tw() - t) * 1e3
             say("coexist: cudaMalloc d (256 MiB)"); t = tw(); d = torch.empty(256 * 1024 * 1024 // 2, device=dev, dtype=torch.bfloat16); out["alloc_256MiB_ms"] = (tw() - t) * 1e3
             say("coexist: cudaHostAlloc h (64 MiB pinned)"); t = tw(); h = torch.empty(64 * 1024 * 1024 // 2, dtype=torch.bfloat16, pin_memory=True); out["pin_64MiB_ms"] = (tw() - t) * 1e3
-        _COEXIST.update({"bufs": (a, b, d, h), "stream": stream}); out["buffers"] = "allocated"
+            torch.matmul(a, b, out=c)   # warm cuBLAS workspace on this stream
+        _COEXIST.update({"bufs": (a, b, c, d, h), "stream": stream}); out["buffers"] = "allocated"
     with torch.cuda.stream(stream):
+        # (A) one in-place kernel, no allocation
         e0 = torch.cuda.Event(enable_timing=True); e1 = torch.cuda.Event(enable_timing=True)
-        say("coexist: launching matmuls"); t = tw()
-        e0.record(stream)
-        for _ in range(n_iter):
-            c = a @ b
-            c = torch.nn.functional.silu(c)
-        e1.record(stream)
-        out["launch_ms"] = (tw() - t) * 1e3
-        say("coexist: event sync (matmul)"); t = tw(); e1.synchronize(); out["sync_wait_ms"] = (tw() - t) * 1e3
-        out["matmul_ms"] = e0.elapsed_time(e1) / n_iter
+        say("coexist: A launch in-place zero_ (no alloc)"); t = tw(); e0.record(stream); d.zero_(); e1.record(stream); out["A_launch_ms"] = (tw() - t) * 1e3
+        say("coexist: A event sync"); t = tw(); e1.synchronize(); out["A_sync_ms"] = (tw() - t) * 1e3; out["A_kernel_ms"] = e0.elapsed_time(e1)
+        # (B) matmuls into a pre-allocated output, no allocation
         e2 = torch.cuda.Event(enable_timing=True); e3 = torch.cuda.Event(enable_timing=True)
-        say("coexist: memset 256 MiB"); e2.record(stream); d.zero_(); e3.record(stream); e3.synchronize(); out["memset_256MiB_ms"] = e2.elapsed_time(e3)
+        say("coexist: B launch matmul(out=) x%d (no alloc)" % n_iter); t = tw(); e2.record(stream)
+        for _ in range(n_iter):
+            torch.matmul(a, b, out=c)
+        e3.record(stream); out["B_launch_ms"] = (tw() - t) * 1e3
+        say("coexist: B event sync"); t = tw(); e3.synchronize(); out["B_sync_ms"] = (tw() - t) * 1e3; out["matmul_ms"] = e2.elapsed_time(e3) / n_iter
+        # (C) allocation through the caching allocator
+        say("coexist: C allocate 64 MiB (caching allocator)"); t = tw(); x = torch.empty(64 * 1024 * 1024 // 2, device=dev, dtype=torch.bfloat16); out["C_alloc_ms"] = (tw() - t) * 1e3
         e4 = torch.cuda.Event(enable_timing=True); e5 = torch.cuda.Event(enable_timing=True)
-        say("coexist: d2h 64 MiB"); e4.record(stream); h.copy_(d[: h.numel()], non_blocking=True); e5.record(stream); e5.synchronize(); out["d2h_64MiB_ms"] = e4.elapsed_time(e5)
+        say("coexist: C d2h 64 MiB"); e4.record(stream); h.copy_(d[: h.numel()], non_blocking=True); e5.record(stream); e5.synchronize(); out["d2h_64MiB_ms"] = e4.elapsed_time(e5)
+        del x
         say("coexist: done")
     out["mem_alloc_MiB"] = torch.cuda.memory_allocated() / 2**20
     return out
@@ -131,6 +144,7 @@ def _abort_all_groups(log) -> dict:
         # B3-1: do NOT touch the communicator; measure whether this process's GPU still executes
         # independent work at normal speed while the main thread is stuck in the collective.
         res = []
+        log("[ft-detect] coexist: main thread stack at deadline:\n" + _main_thread_stack())
         for i, reuse in enumerate((True, True, False)):   # reused buffers first, then a fresh allocation
             log(f"[ft-detect] coexist run {i} reuse={reuse}")
             res.append(_side_stream_bench(log=lambda m: log(f"[ft-detect] {m}"), reuse=reuse))
