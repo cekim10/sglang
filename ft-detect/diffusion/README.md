@@ -401,3 +401,17 @@ so "the first launch behind a stuck collective makes the survivor unrecoverable"
 main thread was blocked, not the context poisoned. The in-server hang of Test 3 run 1 came from
 aborting every group in the eager-split layout; aborting only the stuck group is what made Test 3
 work, not the issuance discipline.
+
+## SP=4 -> SP=3: re-forming the surviving group (standalone probe)
+
+`sp_shrink_probe.py` + `run_shrink.sh`: a replicated-state Ulysses block at SP=4 on two 2-GPU
+machines; the last rank SIGSTOPs at step k; the survivors detect the stalled all-to-all, abort only
+that group, agree on membership through the default store (rank 0 leads), build new NCCL and gloo
+groups among themselves, and recompute step k and finish at SP=3. SGLang's eager device binding
+makes torch split NCCL subgroups from the default communicator, which would need the dead rank, so
+the survivor groups are built with the device unbound (members-only rendezvous). Local CPU check
+(4 gloo ranks): PASS, membership [0, 1, 2], new groups in 25 ms, object broadcast over the new CPU
+group works, continuation bit-exact against the SP=3, SP=4 and SP=1 references.
+Two machines: elves-01 and elves-03 pass only 1500-byte frames between them although both NICs are
+set to MTU 9200, so NCCL needs `LD_PRELOAD=netfix/mss_clamp.so` (unprivileged TCP MSS clamp) with
+sockets (`NCCL_IB_DISABLE=1`); cross-node all-to-all is ~24x slower than within a machine.
