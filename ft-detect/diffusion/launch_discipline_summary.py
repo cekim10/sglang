@@ -32,9 +32,13 @@ def main():
         mm = sorted(r["matmul_ms"] for r in ss)
         print(f"  side-stream {ph:12s}: iterations started {len(bb):3d}, completed {len(ss):3d}, "
               f"matmul_ms median {mm[len(mm)//2] if mm else None}, blocked-in-launch {len(stuck)}, launched-but-never-synced {len(unsynced)}")
+    for ev in ("main.collective_enqueued", "main.flood_first_launch_returned", "main.launch_blocked_or_slow"):
+        for r in log:
+            if r["ev"] == ev:
+                print(f"  {r}")
     if st.get("mode") == "flood":
         print(f"  launches on the main stream before cudaLaunchKernel blocked: {st.get('launches_before_block')}")
-    else:
+    elif st.get("mode") == "disciplined":
         print(f"  abort: {st.get('abort')}")
         print(f"  main stream usable after abort: {st.get('main_stream_after_abort')}")
         for ev in ("main.deadline_miss", "main.post_abort_main_stream", "main.destroy_done", "main.destroy_error", "watchdog.exit"):

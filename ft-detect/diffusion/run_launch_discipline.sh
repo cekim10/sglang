@@ -2,11 +2,11 @@
 # Option-3 probe runner: two ranks on two GPUs, rank 1 freezes, rank 0 either floods launches
 # behind the stuck collective or holds back and polls. Prints a summary per mode.
 #
-#   ./run_launch_discipline.sh [flood|disciplined|both]      (default both)
+#   ./run_launch_discipline.sh [idle|idle_sync|flood|disciplined|all]      (default all)
 # Env: CUDA_VISIBLE_DEVICES=0,1 (two GPUs), NCCL_P2P_DISABLE as for the host, DEADLINE_S (10), MAX_S (120)
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
-MODES=${1:-both}; [ "$MODES" = both ] && MODES="flood disciplined"
+MODES=${1:-all}; [ "$MODES" = all ] && MODES="idle idle_sync flood disciplined"
 PYTHON=${PYTHON:-python}
 DEADLINE_S=${DEADLINE_S:-10}
 MAX_S=${MAX_S:-120}

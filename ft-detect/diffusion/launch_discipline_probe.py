@@ -59,7 +59,9 @@ def side_bench_loop(stop: threading.Event, size: int = 2048, n_iter: int = 20):
         b = torch.randn(size, size, device=dev, dtype=torch.bfloat16)
         c = torch.empty(size, size, device=dev, dtype=torch.bfloat16)
         d = torch.empty(64 * 1024 * 1024 // 2, device=dev, dtype=torch.bfloat16)
-        torch.matmul(a, b, out=c); torch.cuda.Event().record(stream).synchronize()
+        torch.matmul(a, b, out=c)
+        e = torch.cuda.Event(); e.record(stream); e.synchronize()
+    log("side.ready")
     i = 0
     while not stop.is_set():
         i += 1
@@ -87,7 +89,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--rank", type=int, required=True)
     ap.add_argument("--world", type=int, default=2)
-    ap.add_argument("--mode", choices=["flood", "disciplined"], default="disciplined")
+    ap.add_argument("--mode", choices=["idle", "idle_sync", "flood", "disciplined"], default="disciplined",
+                    help="idle: async collective, main thread does nothing; idle_sync: synchronous collective (current stream waits on it, as in the serving path), nothing else; "
+                         "flood: synchronous collective then run-ahead launches on the same stream; disciplined: async collective, poll work, then escape hatches")
     ap.add_argument("--deadline-s", type=float, default=10.0)
     ap.add_argument("--max-s", type=float, default=120.0)
     ap.add_argument("--numel", type=int, default=16 * 1024 * 1024, help="all-to-all size in bf16 elements (32 MiB default)")
@@ -127,38 +131,58 @@ def main():
     time.sleep(0.5)  # give rank 1 time to stop
 
     main_stream = torch.cuda.current_stream()
-    log("main.enqueue_stuck_collective")
-    work = dist.all_to_all_single(buf_out, buf_in, async_op=True)
-    ev = torch.cuda.Event(); ev.record(main_stream)
-    log("main.collective_enqueued")
+    # buffers for the main thread allocated BEFORE the hang so no cudaMalloc happens while stuck
+    x = torch.randn(1024, 1024, device=dev, dtype=torch.bfloat16); y = torch.empty_like(x)
+    z = torch.randn(2048, 2048, device=dev, dtype=torch.bfloat16); zz = torch.empty_like(z)
+    torch.cuda.synchronize()
+    sync_op = a.mode in ("idle_sync", "flood")
+    log("main.enqueue_stuck_collective", sync_op=sync_op)
+    t = time.perf_counter()
+    if sync_op:
+        # like the serving path: ProcessGroupNCCL enqueues on its NCCL stream and makes the current
+        # stream wait on it; the CPU call returns (no blocking wait) unless the launch itself blocks
+        dist.all_to_all_single(buf_out, buf_in)
+        work = None
+    else:
+        work = dist.all_to_all_single(buf_out, buf_in, async_op=True)
+    log("main.collective_enqueued", call_ms=round((time.perf_counter() - t) * 1e3, 2))
+
+    if a.mode in ("idle", "idle_sync"):
+        # nothing issued on the main thread; only the side stream is observed
+        t_end = time.perf_counter() + a.deadline_s + 20
+        while time.perf_counter() < t_end:
+            time.sleep(1.0)
+            log("main.idle_tick", work_done=(work.is_completed() if work is not None else None))
+        stop.set(); dump(a.out, {"state": state, "exit": "normal"}); log("done"); os._exit(0)
 
     if a.mode == "flood":
-        x = torch.randn(1024, 1024, device=dev, dtype=torch.bfloat16); y = torch.empty_like(x)
         n = 0
         slow = None
+        log("main.flood_begin")
         while True:
             t = time.perf_counter()
-            torch.matmul(x, x, out=y)       # same stream, behind the stuck collective
+            torch.matmul(x, x, out=y)       # same stream, ordered behind the stuck collective
             dt = (time.perf_counter() - t) * 1e3
             n += 1
+            if n == 1:
+                log("main.flood_first_launch_returned", launch_ms=round(dt, 3))
             if dt > 500:
                 slow = dt; break
             if n % 500 == 0:
                 log("main.flood_progress", launches=n, last_launch_ms=round(dt, 3))
         state["launches_before_block"] = n
         log("main.launch_blocked_or_slow", launches=n, launch_ms=round(slow, 1))
-        # if we get here, the launch returned after a long block; keep flooding until the watchdog
-        while True:
+        while True:   # keep issuing until the watchdog ends the process
             torch.matmul(x, x, out=y)
     else:
         t_dead = time.perf_counter() + a.deadline_s
         polls = 0
         while time.perf_counter() < t_dead:
             polls += 1
-            if ev.query() or work.is_completed():
+            if work.is_completed():
                 log("main.collective_completed_unexpectedly"); break
             time.sleep(0.01)
-        log("main.deadline_miss", polls=polls, event_done=ev.query())
+        log("main.deadline_miss", polls=polls, work_done=work.is_completed())
         # escape hatch 1: abort the process group from the (unblocked) main thread
         res = {}
         done = threading.Event()
@@ -181,7 +205,6 @@ def main():
         # escape hatch 2: can the main stream run again? (new launch + event-synchronised)
         try:
             e0 = torch.cuda.Event(enable_timing=True); e1 = torch.cuda.Event(enable_timing=True)
-            z = torch.randn(2048, 2048, device=dev, dtype=torch.bfloat16); zz = torch.empty_like(z)
             t = time.perf_counter(); e0.record(main_stream); torch.matmul(z, z, out=zz); e1.record(main_stream)
             log("main.post_abort_launch_returned", launch_ms=round((time.perf_counter() - t) * 1e3, 2))
             ok = False
@@ -190,7 +213,7 @@ def main():
                     ok = True; break
                 time.sleep(0.01)
             log("main.post_abort_main_stream", completed=ok, matmul_ms=round(e0.elapsed_time(e1), 3) if ok else None,
-                stuck_event_done=ev.query(), work_completed=work.is_completed())
+                work_completed=work.is_completed())
             state["main_stream_after_abort"] = ok
         except Exception as e:
             log("main.post_abort_error", error=repr(e)[:200])
