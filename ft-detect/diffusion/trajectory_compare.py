@@ -58,6 +58,7 @@ def traj_timings(d: Path) -> dict:
     steps = [r for r in read_jsonl(d / "steps_rank0.jsonl") if r.get("ev") == "ds"]
     if steps:
         out["steps_executed"] = len(steps)
+        out["first_step_ms"] = round((steps[0]["t_ns"] - steps[0]["t0_ns"]) / 1e6, 1)
         out["warm_step_ms"] = round(sorted((r["t_ns"] - r["t0_ns"]) / 1e6 for r in steps)[len(steps) // 2], 1)
     return out
 
@@ -92,7 +93,7 @@ def main():
         row.update(traj_timings(D / c))
         rows.append(row)
     cols = ["config", "ok", "exact_vs_sp1_ref", "max_abs", "rel_l2", "mean_abs", "image_sha_equal_sp1_ref", "latency_s",
-            "steps_executed", "warm_step_ms", "t_save_ms", "save_bytes", "t_restore_ms", "t_first_resumed_step_ms", "t_remaining_ms",
+            "steps_executed", "first_step_ms", "warm_step_ms", "t_save_ms", "save_bytes", "t_restore_ms", "t_first_resumed_step_ms", "t_remaining_ms",
             "restore_notes", "error"]
     lines = [f"Trajectory portability: {cfg}", "", "| " + " | ".join(cols) + " |", "|" + "---|" * len(cols)]
     for r in rows:

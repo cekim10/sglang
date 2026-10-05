@@ -181,3 +181,16 @@ records and the runtime's log lines. New runs also write `ready.json`.
 ```bash
 python startup_decomp.py runs/diff_char_* runs/traj_* --md results/startup_decomp.md
 ```
+
+## B3-1: kernel coexistence probe (does the stuck rank's GPU still compute?)
+
+`FT_ABORT_MODE=coexist` leaves the communicator alone. The probe thread measures a bf16 matmul
+benchmark on a fresh CUDA stream (event-synchronised only) ~90 s after start-up as a baseline and
+again at the progress deadline while the main thread is blocked in the SP all-to-all. Equal
+timings mean the GPU, weights and trajectory remain usable for an in-process SP=1 continuation
+(B3-2); a large slowdown or a hang means the stuck NCCL kernel starves the device.
+
+```bash
+FT_ABORT_PROBE=1 FT_ABORT_MODE=coexist FT_ABORT_DEADLINE_S=10 MIN_WARMUP=100 STEADY_WAIT=60 MAX_DETECT_WAIT=60 POST_GRACE=30 ./run_case_diff.sh B 1 1
+python containment.py --events runs/diff_B_r1_1_$(date +%Y%m%d)-* | grep -E "baseline|during hang|deadline_miss"
+```

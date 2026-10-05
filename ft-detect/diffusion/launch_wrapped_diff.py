@@ -69,6 +69,43 @@ def _progress_touch():
     _PROGRESS["last_ns"] = now_ns()
 
 
+def _side_stream_bench(n_iter: int = 30, size: int = 4096) -> dict:
+    """bf16 matmul + elementwise on a fresh CUDA stream, synchronised with stream events only
+    (a device-wide synchronize would wait on the stuck NCCL kernel too)."""
+    import torch
+
+    if not torch.cuda.is_available():
+        return {"error": "no cuda"}
+    dev = torch.device("cuda", torch.cuda.current_device())
+    stream = torch.cuda.Stream(device=dev)
+    out = {}
+    with torch.cuda.stream(stream):
+        a = torch.randn(size, size, device=dev, dtype=torch.bfloat16)
+        b = torch.randn(size, size, device=dev, dtype=torch.bfloat16)
+        # warm
+        c = a @ b
+        e0 = torch.cuda.Event(enable_timing=True); e1 = torch.cuda.Event(enable_timing=True)
+        e0.record(stream)
+        for _ in range(n_iter):
+            c = a @ b
+            c = torch.nn.functional.silu(c)
+        e1.record(stream)
+        t_wall0 = time.perf_counter()
+        e1.synchronize()
+        out["matmul_ms"] = e0.elapsed_time(e1) / n_iter
+        out["sync_wait_ms"] = (time.perf_counter() - t_wall0) * 1e3
+        e2 = torch.cuda.Event(enable_timing=True); e3 = torch.cuda.Event(enable_timing=True)
+        e2.record(stream); d = torch.empty(256 * 1024 * 1024 // 2, device=dev, dtype=torch.bfloat16); d.zero_(); e3.record(stream); e3.synchronize()
+        out["alloc_256MiB_ms"] = e2.elapsed_time(e3)
+        h = torch.empty(64 * 1024 * 1024 // 2, dtype=torch.bfloat16, pin_memory=True)
+        e4 = torch.cuda.Event(enable_timing=True); e5 = torch.cuda.Event(enable_timing=True)
+        e4.record(stream); h.copy_(d[: h.numel()], non_blocking=True); e5.record(stream); e5.synchronize()
+        out["d2h_64MiB_ms"] = e4.elapsed_time(e5)
+        del a, b, c, d, h
+    out["mem_alloc_MiB"] = torch.cuda.memory_allocated() / 2**20
+    return out
+
+
 def _abort_all_groups(log) -> dict:
     """Abort every torch process group this rank holds; returns per-attempt timings."""
     import torch
@@ -79,7 +116,17 @@ def _abort_all_groups(log) -> dict:
     if not dist.is_initialized():
         out["error"] = "torch.distributed not initialized"
         return out
-    mode = os.environ.get("FT_ABORT_MODE", "all")   # all | sp | world | exit
+    mode = os.environ.get("FT_ABORT_MODE", "all")   # all | sp | world | exit | coexist
+    if mode == "coexist":
+        # B3-1: do NOT touch the communicator; measure whether this process's GPU still executes
+        # independent work at normal speed while the main thread is stuck in the collective.
+        res = []
+        for i in range(3):
+            res.append(_side_stream_bench())
+            time.sleep(1.0)
+        out["attempts"].append({"group": "coexist", "how": "side-stream matmul while stuck", "ok": True,
+                                "bench_during_hang": res, "t0_ns": now_ns(), "t_ns": now_ns()})
+        return out
     if mode == "exit":
         # process-level containment: give up on the collective and leave; measures how fast the
         # GPU is released and how the peer / HTTP side react to a vanished rank
@@ -552,6 +599,14 @@ def run_scheduler_process_wrapped(local_rank, rank, master_port, server_args, *a
     except Exception as e:
         print(f"[ft-detect] step logger install failed: {e!r}", flush=True)
     if os.environ.get("FT_ABORT_PROBE", "0") == "1":
+        if os.environ.get("FT_ABORT_MODE") == "coexist":
+            def _baseline(w):
+                time.sleep(float(os.environ.get("FT_COEXIST_BASELINE_DELAY_S", "90")))  # after model load/warmup
+                try:
+                    w.write({"ev": "coexist_baseline", "bench": [_side_stream_bench() for _ in range(3)]})
+                except Exception as e:
+                    w.write({"ev": "coexist_baseline", "error": repr(e)})
+            _threading.Thread(target=_baseline, args=(JsonlWriter(logs_dir() / f"steps_rank{rank}.jsonl"),), daemon=True).start()
         _threading.Thread(target=_abort_probe_thread, args=(JsonlWriter(logs_dir() / f"steps_rank{rank}.jsonl"), rank),
                           daemon=True, name="ft-abort-probe").start()
         print(f"[ft-detect] FT_ABORT_PROBE armed on rank{rank}: deadline {os.environ.get('FT_ABORT_DEADLINE_S', '10')}s, "
