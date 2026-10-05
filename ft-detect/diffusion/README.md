@@ -387,3 +387,17 @@ CUDA_VISIBLE_DEVICES=0,1 NCCL_P2P_DISABLE=1 ./run_native_ft.sh      # 16 cases; 
 Gate: if the survivor is recoverable with a native primitive after k1/k8/flood, the issuance
 discipline is unnecessary (its core claim is killed). If only `none` recovers, the runtime's issuance
 decides whether communication-layer fault tolerance stays usable.
+
+### Result (2026-10-05): issuance core KILLED
+
+torch 2.13.0+cu129, NCCL 2.29.7, blocking communicators (the nonblocking half of the matrix produced
+no rows). `_abort_process_group(subgroup)` (ncclCommAbort) called from a detector thread recovered
+the survivor in every case, 0.59-0.69 s, including after 1, 8 and unbounded dependent kernels: the
+blocked main thread was released, new work on the same stream completed and
+`torch.cuda.synchronize()` returned. `shrink_group(..., SHRINK_ABORT)` never returned within 20 s,
+although the stuck kernel was gone afterwards.
+This corrects the option-3 conclusion. The flood mode there never called abort from another thread,
+so "the first launch behind a stuck collective makes the survivor unrecoverable" was not shown; the
+main thread was blocked, not the context poisoned. The in-server hang of Test 3 run 1 came from
+aborting every group in the eager-split layout; aborting only the stuck group is what made Test 3
+work, not the issuance discipline.
