@@ -371,3 +371,19 @@ degradation helps only for hard failures at high load with slow restarts; at the
 restart it is within 10-15% of migration + restart. At hardware failure rates the failure-attributable
 SLO violations are below 1e-4 of requests for every detected policy; the 600 s non-detection of the
 stock stack causes several times more damage than any detected policy.
+
+## Native NCCL fault tolerance vs issuance discipline (collision test)
+
+Does PyTorch/NCCL's own recovery (`_abort_process_group`, or `dist.shrink_group(..., SHRINK_ABORT)`
+over `ncclCommShrink`, NCCL >= 2.27) recover the surviving rank even after the runtime has issued
+dependent kernels behind the stuck collective? `native_ft_probe.py` reproduces SGLang's layout (eager
+init, split subgroup), freezes rank 1, issues none / 1 / 8 / unbounded dependent kernels, and recovers
+from a detector thread; each step is bounded.
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 NCCL_P2P_DISABLE=1 ./run_native_ft.sh      # 16 cases; results/native_ft/summary.md
+```
+
+Gate: if the survivor is recoverable with a native primitive after k1/k8/flood, the issuance
+discipline is unnecessary (its core claim is killed). If only `none` recovers, the runtime's issuance
+decides whether communication-layer fault tolerance stays usable.
