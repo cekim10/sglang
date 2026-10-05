@@ -1,0 +1,29 @@
+{
+ "log": [
+  {
+   "t": 0.9682,
+   "ev": "init_done",
+   "nccl": "2.29.7",
+   "torch": "2.13.0+cu129"
+  },
+  {
+   "t": 1.2928,
+   "ev": "warmup_done"
+  },
+  {
+   "t": 1.325,
+   "ev": "rank1.sigstop_self"
+  },
+  {
+   "t": 19.2016,
+   "ev": "rank1.resumed"
+  }
+ ],
+ "state": {
+  "mode": "disciplined",
+  "rank": 1,
+  "launches_before_block": null,
+  "abort": null
+ },
+ "exit": "resumed"
+}

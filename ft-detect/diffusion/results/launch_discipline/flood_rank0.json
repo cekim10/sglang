@@ -1,0 +1,104 @@
+{
+ "log": [
+  {
+   "t": 0.6648,
+   "ev": "init_done",
+   "nccl": "2.29.7",
+   "torch": "2.13.0+cu129"
+  },
+  {
+   "t": 0.9814,
+   "ev": "warmup_done"
+  },
+  {
+   "t": 1.1481,
+   "ev": "side.ready"
+  },
+  {
+   "t": 1.1483,
+   "ev": "side.launch_begin",
+   "i": 1
+  },
+  {
+   "t": 1.1486,
+   "ev": "side.launch_done",
+   "i": 1,
+   "launch_ms": 0.35
+  },
+  {
+   "t": 1.1499,
+   "ev": "side.sync_done",
+   "i": 1,
+   "wait_ms": 1.2,
+   "matmul_ms": 0.078
+  },
+  {
+   "t": 2.1504,
+   "ev": "side.launch_begin",
+   "i": 2
+  },
+  {
+   "t": 2.1508,
+   "ev": "side.launch_done",
+   "i": 2,
+   "launch_ms": 0.37
+  },
+  {
+   "t": 2.152,
+   "ev": "side.sync_done",
+   "i": 2,
+   "wait_ms": 1.2,
+   "matmul_ms": 0.078
+  },
+  {
+   "t": 3.1526,
+   "ev": "side.launch_begin",
+   "i": 3
+  },
+  {
+   "t": 3.1532,
+   "ev": "side.launch_done",
+   "i": 3,
+   "launch_ms": 0.49
+  },
+  {
+   "t": 3.1543,
+   "ev": "side.sync_done",
+   "i": 3,
+   "wait_ms": 1.1,
+   "matmul_ms": 0.077
+  },
+  {
+   "t": 4.017,
+   "ev": "main.enqueue_stuck_collective",
+   "sync_op": true
+  },
+  {
+   "t": 4.0173,
+   "ev": "main.collective_enqueued",
+   "call_ms": 0.22
+  },
+  {
+   "t": 4.0173,
+   "ev": "main.flood_begin"
+  },
+  {
+   "t": 120.0024,
+   "ev": "watchdog.exit",
+   "note": "hard exit; something is still blocked",
+   "state": {
+    "mode": "flood",
+    "rank": 0,
+    "launches_before_block": null,
+    "abort": null
+   }
+  }
+ ],
+ "state": {
+  "mode": "flood",
+  "rank": 0,
+  "launches_before_block": null,
+  "abort": null
+ },
+ "exit": "watchdog"
+}

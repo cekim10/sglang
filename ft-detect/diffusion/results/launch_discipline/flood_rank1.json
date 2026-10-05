@@ -1,0 +1,36 @@
+{
+ "log": [
+  {
+   "t": 0.673,
+   "ev": "init_done",
+   "nccl": "2.29.7",
+   "torch": "2.13.0+cu129"
+  },
+  {
+   "t": 0.9927,
+   "ev": "warmup_done"
+  },
+  {
+   "t": 1.0254,
+   "ev": "rank1.sigstop_self"
+  },
+  {
+   "t": 120.3248,
+   "ev": "watchdog.exit",
+   "note": "hard exit; something is still blocked",
+   "state": {
+    "mode": "flood",
+    "rank": 1,
+    "launches_before_block": null,
+    "abort": null
+   }
+  }
+ ],
+ "state": {
+  "mode": "flood",
+  "rank": 1,
+  "launches_before_block": null,
+  "abort": null
+ },
+ "exit": "watchdog"
+}
