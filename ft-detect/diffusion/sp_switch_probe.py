@@ -49,6 +49,14 @@ class Deadline(Exception):
     pass
 
 
+RES_SCALE = 0.1   # keeps the norm-free toy block bounded over many layers/steps (bf16)
+
+
+def rms(x):
+    xf = x.float()
+    return (xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + 1e-6)).to(x.dtype)
+
+
 def a2a_contained(recv, send, deadline_s):
     work = dist.all_to_all_single(recv, send, async_op=True)
     t0 = time.perf_counter()
@@ -61,7 +69,8 @@ def a2a_contained(recv, send, deadline_s):
 def layer_sp2(layer: Layer, x_full, rank, world, deadline_s):
     S, H, hd = x_full.shape[0], layer.heads, layer.dd
     S_loc = S // world
-    x_local = x_full[rank * S_loc:(rank + 1) * S_loc]
+    h = rms(x_full)
+    x_local = h[rank * S_loc:(rank + 1) * S_loc]
     qkv = (x_local @ layer.wqkv).view(S_loc, 3, H, hd)
     send = qkv.view(S_loc, 3, world, H // world, hd).permute(2, 0, 1, 3, 4).contiguous()
     recv = torch.empty_like(send)
@@ -82,19 +91,22 @@ def layer_sp2(layer: Layer, x_full, rank, world, deadline_s):
             raise Deadline("all-gather not complete")
     work.wait()
     attn_full = torch.cat(gathered, dim=0)
-    x_full = x_full + attn_full @ layer.wo
-    x_full = x_full + F.silu(x_full @ layer.w1) @ layer.w2
+    x_full = x_full + RES_SCALE * (attn_full @ layer.wo)
+    h2 = rms(x_full)
+    x_full = x_full + RES_SCALE * (F.silu(h2 @ layer.w1) @ layer.w2)
     return x_full
 
 
 def layer_sp1(layer: Layer, x_full):
     S, H, hd = x_full.shape[0], layer.heads, layer.dd
-    qkv = (x_full @ layer.wqkv).view(S, 3, H, hd)
+    h = rms(x_full)
+    qkv = (h @ layer.wqkv).view(S, 3, H, hd)
     q, k, v = qkv[:, 0], qkv[:, 1], qkv[:, 2]
     o = F.scaled_dot_product_attention(q.transpose(0, 1).unsqueeze(0), k.transpose(0, 1).unsqueeze(0), v.transpose(0, 1).unsqueeze(0))
     attn = o.squeeze(0).transpose(0, 1).reshape(S, H * hd)
-    x_full = x_full + attn @ layer.wo
-    x_full = x_full + F.silu(x_full @ layer.w1) @ layer.w2
+    x_full = x_full + RES_SCALE * (attn @ layer.wo)
+    h2 = rms(x_full)
+    x_full = x_full + RES_SCALE * (F.silu(h2 @ layer.w1) @ layer.w2)
     return x_full
 
 
@@ -145,7 +157,9 @@ def main():
         torch.cuda.synchronize(); t = time.perf_counter()
         x_ref = run_steps_sp1(layers, x0.clone(), a.steps)
         torch.cuda.synchronize(); res["sp1_step_s"] = (time.perf_counter() - t) / a.steps
-        log("reference_sp1_done", step_s=round(res["sp1_step_s"], 4))
+        log("reference_sp1_done", step_s=round(res["sp1_step_s"], 4), finite=bool(torch.isfinite(x_ref).all()), scale=float(x_ref.float().abs().max()))
+        if not torch.isfinite(x_ref).all():
+            log("abort_run", reason="SP1 reference not finite: toy model diverged"); json.dump({"log": LOG, "exit": "nonfinite"}, open(a.out, "w"), indent=1); os._exit(3)
     dist.barrier()
 
     # 2) SP2 reference with both ranks
@@ -158,6 +172,8 @@ def main():
     x_sp2 = x
     log("reference_sp2_done", step_s=round(res["sp2_step_s"], 4))
     if a.rank == 0:
+        if not torch.isfinite(x_sp2).all():
+            log("abort_run", reason="SP2 reference not finite"); json.dump({"log": LOG, "exit": "nonfinite"}, open(a.out, "w"), indent=1); os._exit(3)
         res["control_sp2_vs_sp1"] = cmp(x_sp2, x_ref)
         log("control", **res["control_sp2_vs_sp1"])
     dist.barrier()
