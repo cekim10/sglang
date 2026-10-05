@@ -239,7 +239,9 @@ def _abort_probe_thread(steps: "JsonlWriter", rank: int) -> None:
 # scheduler's fan-out, kills the peer process, and re-runs the same step from the unchanged
 # boundary state. Measurement prototype: fixed deadline, no health/unroutable signalling.
 class PeerFailure(RuntimeError):
-    pass
+    def __init__(self, msg, group=None):
+        super().__init__(msg)
+        self.group = group
 
 
 _CONTAIN = {"on": False, "deadline_s": 5.0, "init_deadline_s": 900.0, "failed_over": False, "injected": False, "orig": {}}
@@ -262,7 +264,7 @@ def _make_contained(name, orig):
         t0 = time.perf_counter()
         while not work.is_completed():
             if time.perf_counter() - t0 > deadline:
-                raise PeerFailure(f"{name} not complete after {deadline:.1f}s")
+                raise PeerFailure(f"{name} not complete after {deadline:.1f}s", group=kwargs.get("group"))
         work.wait()
         return None
     contained.__name__ = f"contained_{name}"
@@ -294,18 +296,74 @@ def _install_containment(steps):
         steps.write({"ev": "contain", "phase": "install_error", "error": repr(e)[:300]})
 
 
-def _failover_to_sp1(steps, stage, batch, rank: int) -> dict:
-    """Abort the poisoned communicators and reconfigure this process to run alone."""
-    import gc
+def _bounded(fn, limit_s):
+    """Run fn in a daemon thread; (finished, seconds, error). A hang is a result, not a stuck rank."""
+    res, done = {}, threading.Event()
+
+    def run():
+        t = time.perf_counter()
+        try:
+            fn()
+        except Exception as e:
+            res["err"] = repr(e)[:200]
+        res["s"] = time.perf_counter() - t
+        done.set()
+
+    threading.Thread(target=run, daemon=True, name="ft-abort").start()
+    return (True, res["s"], res.get("err")) if done.wait(limit_s) else (False, limit_s, f"hung > {limit_s:.0f} s")
+
+
+def _fence_peers(rank: int) -> list:
     import signal as _sig
+
+    killed = []
+    pids = json.load(open(run_dir() / "pids.json"))
+    for r, pid in pids.get("ranks", {}).items():
+        if int(r) != rank:
+            try:
+                os.kill(int(pid), _sig.SIGCONT); os.kill(int(pid), _sig.SIGKILL); killed.append(int(pid))
+            except ProcessLookupError:
+                pass
+    return killed
+
+
+def _failover_to_sp1(steps, stage, batch, rank: int, stuck_group=None) -> dict:
+    """Fence the peer, abort the stuck communicator, and reconfigure this process to run alone.
+
+    FT_CONTAIN_ABORT: stuck (default; only the group whose collective missed the deadline) |
+    world (_abort_process_group(), every group) | none (abandon the stuck collective).
+    FT_CONTAIN_FENCE_FIRST=1 (default) kills the peer before the abort.
+    """
+    import faulthandler
+    import gc
     import sys as _sys
 
     import torch
     import torch.distributed as dist
     from torch.distributed import distributed_c10d as c10d
 
-    tl = {}
-    t = time.perf_counter(); c10d._abort_process_group(); tl["t_abort_s"] = time.perf_counter() - t
+    def mark(what):
+        print(f"[ft-detect] FT_CONTAIN failover: {what} at +{(time.perf_counter() - t_start) * 1e3:.0f} ms", flush=True)
+
+    t_start = time.perf_counter()
+    tl = {"abort_mode": os.environ.get("FT_CONTAIN_ABORT", "stuck"),
+          "fence_first": os.environ.get("FT_CONTAIN_FENCE_FIRST", "1") == "1"}
+    if tl["fence_first"]:
+        tl["peers_killed"] = _fence_peers(rank); mark(f"fenced {tl['peers_killed']}")
+    limit = float(os.environ.get("FT_CONTAIN_ABORT_TIMEOUT_S", "10"))
+    if tl["abort_mode"] == "world":
+        ok, secs, err = _bounded(lambda: c10d._abort_process_group(), limit)
+    elif tl["abort_mode"] == "stuck":
+        target = stuck_group if stuck_group is not None else c10d.GroupMember.WORLD
+        ok, secs, err = _bounded(lambda: c10d._abort_process_group(target), limit)
+    else:
+        ok, secs, err = True, 0.0, None
+    tl.update({"abort_finished": ok, "t_abort_s": secs, "abort_error": err})
+    mark(f"abort {tl['abort_mode']} finished={ok} ({secs * 1e3:.0f} ms) {err or ''}")
+    if not ok:
+        faulthandler.dump_traceback(file=_sys.stderr, all_threads=True)
+    if not tl["fence_first"]:
+        tl["peers_killed"] = _fence_peers(rank); mark(f"fenced {tl['peers_killed']}")
     t = time.perf_counter()
     from sglang.multimodal_gen.runtime.distributed import parallel_state as ps
     from sglang.multimodal_gen.runtime.distributed.group_coordinator import GroupCoordinator
@@ -352,20 +410,8 @@ def _failover_to_sp1(steps, stage, batch, rank: int) -> dict:
                 tl["scheduler_patched"] = True
             except Exception as e:
                 tl["scheduler_patch_error"] = repr(e)[:120]
-    # free the peer's GPU: a stopped or wedged rank never comes back on its own
-    killed = []
-    try:
-        pids = json.load(open(run_dir() / "pids.json"))
-        for r, pid in pids.get("ranks", {}).items():
-            if int(r) != rank:
-                try:
-                    os.kill(int(pid), _sig.SIGCONT); os.kill(int(pid), _sig.SIGKILL); killed.append(int(pid))
-                except ProcessLookupError:
-                    pass
-    except Exception as e:
-        tl["kill_error"] = repr(e)[:120]
-    tl["peers_killed"] = killed
     tl["t_reconfigure_s"] = time.perf_counter() - t
+    mark("reconfigured to SP=1")
     tl["cuda_mem_alloc_MiB"] = torch.cuda.memory_allocated() / 2**20 if torch.cuda.is_available() else None
     _CONTAIN["failed_over"] = True
     return tl
@@ -430,7 +476,7 @@ def _traj_save(ctx, step, batch, server_args, rank, tag):
     t0 = now_ns()
     b = _traj_bundle(ctx, step, batch, server_args)
     if torch.cuda.is_available():
-        torch.cuda.synchronize()
+        torch.cuda.current_stream().synchronize()
     t1 = now_ns()
     path = os.path.join(d, f"{tag}_rank{rank}.pt")
     torch.save({k: (v.cpu() if isinstance(v, torch.Tensor) else v) for k, v in b.items()} | {
@@ -697,7 +743,7 @@ def _install_step_logger(rank: int) -> None:
                 print(f"[ft-detect] FT_CONTAIN deadline miss at step {si}: {e}; failing over to SP1 in-process", flush=True)
                 steps.write({"ev": "contain", "phase": "deadline_miss", "i": si, "t0_ns": t0, "t_ns": t_fail, "error": str(e)[:200]})
                 try:
-                    tl = _failover_to_sp1(steps, self, batch, rank)
+                    tl = _failover_to_sp1(steps, self, batch, rank, stuck_group=e.group)
                 except BaseException as fe:
                     steps.write({"ev": "contain", "phase": "failover_error", "i": si, "t_ns": now_ns(), "error": repr(fe)[:300]})
                     raise

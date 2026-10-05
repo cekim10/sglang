@@ -58,7 +58,9 @@ def analyze(run: Path, sp1ref: Path | None) -> dict:
            "contained": miss is not None, "failed_over": fo is not None, "recomputed": rec is not None}
     if inj and miss:
         row["T_detect_s"] = (miss["t_ns"] - inj["t_ns"]) / 1e9
+    row["abort_mode"] = env.get("abort"); row["fence_first"] = env.get("fence_first")
     if fo:
+        row["abort_finished"] = fo.get("abort_finished"); row["abort_error"] = fo.get("abort_error")
         row["T_abort_s"] = fo.get("t_abort_s"); row["T_reconfigure_s"] = fo.get("t_reconfigure_s")
         row["coordinators_shrunk"] = ",".join(fo.get("coordinators_shrunk", [])); row["peers_killed"] = fo.get("peers_killed")
         row["modules_sp_size_reset"] = fo.get("modules_sp_size_reset")
@@ -134,7 +136,7 @@ def main():
         cands = sorted((HERE / "runs").glob("contain_sp1ref_*"))
         sp1 = cands[-1] if cands else None
     rows = [analyze(Path(r), sp1) for r in a.runs if Path(r).is_dir()]
-    cols_timeline = ["run", "shape", "steps", "fail_step", "deadline_s", "T_detect_s", "T_abort_s", "T_switch_s", "T_recompute_s",
+    cols_timeline = ["run", "shape", "steps", "fail_step", "deadline_s", "abort_mode", "fence_first", "abort_finished", "T_detect_s", "T_abort_s", "T_switch_s", "T_recompute_s",
                      "sp2_step_ms_median", "sp1_step_ms_median", "ref_latency_s", "fail_latency_s", "T_added_s", "after_latency_s", "sp1ref_latency_s"]
     cols_output = ["run", "injected", "rank1_after_fail", "fail_ok", "after_ok", "relerr_vs_sp2ref", "relerr_vs_sp1ref", "control_sp1_vs_sp2", "after_vs_sp1ref",
                    "coordinators_shrunk", "peers_killed", "modules_sp_size_reset", "errors", "fail_error", "after_error"]

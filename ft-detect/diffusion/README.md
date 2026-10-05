@@ -280,3 +280,22 @@ control `control_sp1_vs_sp2` (the SP=1 and SP=2 references differ numerically on
 PASS = the failing request completes with an error within the control and the next request is
 served at SP=1 by the same process. If the rank dies right after the abort, retry with
 `TORCH_NCCL_ASYNC_ERROR_HANDLING=0` (torch's documented setting for `_abort_process_group`).
+
+### Test 3 run 1 finding and the abort matrix
+
+First valid run (2026-10-05): the deadline fired at exactly 5.0 s after rank 1 froze, but
+`_abort_process_group()` (all groups) never returned in the server; torch's NCCL watchdog then
+killed rank 0 at 600 s and the job stayed unfinished. The option-3 probe, where the same call
+returned in 0.6 s, used one lazily created group. SGLang initialises the default group eagerly
+(`device_id`), so its subgroups are NCCL splits of it, and it adds gloo groups.
+`abort_matrix_probe.py` rebuilds that layout and tries one variant per run, each bounded:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 NCCL_P2P_DISABLE=1 ./run_abort_matrix.sh     # ~8 cases, <2 min each worst case
+cat results/abort_matrix/summary.md
+```
+
+The wrapper now fences the peer first, aborts only the stuck group by default
+(`ABORT=stuck|world|none`), bounds the abort (`ABORT_TIMEOUT_S`, stacks dumped to the rank log on
+a hang), prints a timestamp per failover sub-step, and the failing request is bounded by
+`REQ_TIMEOUT` (300 s) so a hang ends the run. Pick `ABORT` from the matrix.
