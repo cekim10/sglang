@@ -15,6 +15,8 @@ BACKEND=${BACKEND:-nccl}; SHAPE=${SHAPE:-wan}; NPROC=${NPROC:-2}; NNODES=${NNODE
 WORLD=$(( NPROC * NNODES ))
 export MASTER_ADDR=${MASTER_ADDR:-127.0.0.1} MASTER_PORT=${MASTER_PORT:-29561} WORLD_SIZE=$WORLD
 OUT=${OUT_DIR:-$HERE/results/shrink_${BACKEND}_${SHAPE}}; mkdir -p "$OUT"
+rm -f "$OUT"/rank*.log "$OUT"/rank*.json      # stale logs from an earlier run would be printed below
+echo "[run_shrink] $(hostname): NODE_RANK=$NODE_RANK of NNODES=$NNODES (node 0 must run on the MASTER_ADDR machine: $MASTER_ADDR)"
 PYTHON=${PYTHON:-python}
 pids=()
 for l in $(seq 0 $(( NPROC - 1 ))); do
