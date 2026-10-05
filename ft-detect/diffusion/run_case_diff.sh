@@ -40,7 +40,7 @@ LOAD_DURATION=$(( MIN_WARMUP + STEADY_WAIT + INJECT_JITTER + MAX_DETECT_WAIT + P
 export FT_API=diffusion
 mkdir -p "$RUNS_DIR" "$RESULTS_DIR"
 
-DETECT_RE='"pattern":"(watchdog_fire|scheduler_exception|subprocess_crashed|sigquit|kill_tree|nccl_timeout|nccl_error|abort|torch_dist_error|cuda_error|scheduler_terminated|diff_recv_error|diff_exec_error|diff_max_errors|diff_worker_dead|diff_worker_shutdown|diff_ipc_a2a_timeout|ft_abort_miss|ft_abort_done)"|"who":"(http_server|rank0)","pid":[0-9]+,"state":"(dead|zombie)"'
+DETECT_RE='"pattern":"(watchdog_fire|scheduler_exception|subprocess_crashed|sigquit|kill_tree|nccl_timeout|nccl_error|abort|torch_dist_error|cuda_error|scheduler_terminated|diff_recv_error|diff_exec_error|diff_max_errors|diff_worker_dead|diff_worker_shutdown|diff_ipc_a2a_timeout|ft_abort_miss|ft_abort_done|ft_contain_miss|ft_contain_done)"|"who":"(http_server|rank0)","pid":[0-9]+,"state":"(dead|zombie)"'
 
 cleanup_run() {
   "$PYTHON" "$ROOT/stop.py" || true

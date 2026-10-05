@@ -34,6 +34,7 @@ def main():
     ap.add_argument("--prompt", default=PROMPT)
     ap.add_argument("--out", required=True)
     ap.add_argument("--timeout", type=float, default=1800.0)
+    ap.add_argument("--save", default=None, help="write the returned image/video bytes to this path")
     a = ap.parse_args()
     dims = [int(x) for x in a.shape.lower().split("x")]
     w, h = dims[0], dims[1]
@@ -58,6 +59,9 @@ def main():
                     rec["content_status"] = content.status_code
                     rec["sha256"] = hashlib.sha256(content.content).hexdigest()
                     rec["bytes"] = len(content.content)
+                    if a.save:
+                        os.makedirs(os.path.dirname(os.path.abspath(a.save)), exist_ok=True)
+                        open(a.save, "wb").write(content.content)
                 else:
                     rec["error"] = str(job.get("error") or job)[:300]
             else:
@@ -73,6 +77,9 @@ def main():
                     raw = base64.b64decode(data[0]["b64_json"])
                     rec["sha256"] = hashlib.sha256(raw).hexdigest()
                     rec["bytes"] = len(raw)
+                    if a.save:
+                        os.makedirs(os.path.dirname(os.path.abspath(a.save)), exist_ok=True)
+                        open(a.save, "wb").write(raw)
                 else:
                     rec["error"] = "no b64 image in response"
             else:

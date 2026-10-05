@@ -14,6 +14,13 @@ so replacing that global with a wrapper is enough. Inside each rank the wrapper:
 The HTTP server runs in the main process (uvicorn), which has no launch callback,
 so a background thread writes run/pids.json once every rank PID file exists.
 
+Test 3 (FT_CONTAIN=1): failure-contained execution. Collectives are issued async and polled
+under FT_CONTAIN_DEADLINE_S (default 5 s); a miss inside a request aborts the process groups,
+shrinks every group coordinator to this rank, disables the DiT's internal sequence shard,
+kills the peer and re-runs the same step at SP=1 in the same process (see README, Test 3).
+FT_FAIL_STEP=k FT_FAIL_RANK=r FT_FAIL_REQ=n: rank r SIGSTOPs itself at step k of its n-th
+non-warmup request (the deterministic injection used by run_contain.sh).
+
 Usage: same CLI as `python -m sglang.multimodal_gen.runtime.launch_server`, e.g.
     python launch_wrapped_diff.py --model-path black-forest-labs/FLUX.1-dev --num-gpus 2 --sp-degree 2 --port 30000
 """
@@ -22,6 +29,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import sys
 import threading
 import time
@@ -219,6 +227,147 @@ def _abort_probe_thread(steps: "JsonlWriter", rank: int) -> None:
                                  "cuda_mem_alloc": torch.cuda.memory_allocated() if torch.cuda.is_available() else None})
                     break
             return
+
+
+# ---- Test 3: in-process failure containment + SP2->SP1 continuation (FT_CONTAIN=1) ------------
+# Collectives issued through torch.distributed are wrapped so the CPU never issues a dependent
+# kernel behind an unfinished collective: async_op + poll work.is_completed() under a deadline
+# (Test 1: ~+2%). A deadline miss raises PeerFailure. The denoising-step wrapper catches it,
+# aborts the process group (Test 2: ~0.6 s), reconfigures the live SP group to world size 1,
+# disables the model's internal sequence shard for this request, drops the dead peer from the
+# scheduler's fan-out, kills the peer process, and re-runs the same step from the unchanged
+# boundary state. Measurement prototype: fixed deadline, no health/unroutable signalling.
+class PeerFailure(RuntimeError):
+    pass
+
+
+_CONTAIN = {"on": False, "deadline_s": 5.0, "init_deadline_s": 900.0, "failed_over": False, "injected": False, "orig": {}}
+
+
+def _contain_deadline() -> float:
+    # while no request is in flight (model load, warm-up barriers) allow long waits
+    return _CONTAIN["deadline_s"] if _PROGRESS["in_request"] else _CONTAIN["init_deadline_s"]
+
+
+def _make_contained(name, orig):
+    def contained(*args, **kwargs):
+        if kwargs.get("async_op") or _CONTAIN["failed_over"]:
+            return orig(*args, **kwargs)
+        kwargs["async_op"] = True
+        work = orig(*args, **kwargs)
+        if work is None:
+            return None
+        deadline = _contain_deadline()
+        t0 = time.perf_counter()
+        while not work.is_completed():
+            if time.perf_counter() - t0 > deadline:
+                raise PeerFailure(f"{name} not complete after {deadline:.1f}s")
+        work.wait()
+        return None
+    contained.__name__ = f"contained_{name}"
+    return contained
+
+
+def _install_containment(steps):
+    import torch.distributed as dist
+
+    _CONTAIN["on"] = True
+    _CONTAIN["deadline_s"] = float(os.environ.get("FT_CONTAIN_DEADLINE_S", "5"))
+    for name in ("all_to_all_single", "all_gather_into_tensor", "all_reduce", "all_gather", "broadcast"):
+        orig = getattr(dist, name, None)
+        if orig is None or name in _CONTAIN["orig"]:
+            continue
+        _CONTAIN["orig"][name] = orig
+        setattr(dist, name, _make_contained(name, orig))
+    # the diffusion runtime bound an alias to all_gather_into_tensor at import time
+    try:
+        from sglang.multimodal_gen.runtime.distributed import utils as dutils
+        from sglang.multimodal_gen.runtime.distributed.device_communicators import base_device_communicator as bdc
+
+        c = _make_contained("all_gather_single", _CONTAIN["orig"].get("all_gather_into_tensor") or dutils.all_gather_single)
+        dutils.all_gather_single = c
+        bdc.all_gather_single = c
+        steps.write({"ev": "contain", "phase": "installed", "deadline_s": _CONTAIN["deadline_s"], "patched": list(_CONTAIN["orig"]) + ["all_gather_single"]})
+        print(f"[ft-detect] FT_CONTAIN armed: deadline {_CONTAIN['deadline_s']}s on {list(_CONTAIN['orig'])}", flush=True)
+    except Exception as e:
+        steps.write({"ev": "contain", "phase": "install_error", "error": repr(e)[:300]})
+
+
+def _failover_to_sp1(steps, stage, batch, rank: int) -> dict:
+    """Abort the poisoned communicators and reconfigure this process to run alone."""
+    import gc
+    import signal as _sig
+    import sys as _sys
+
+    import torch
+    import torch.distributed as dist
+    from torch.distributed import distributed_c10d as c10d
+
+    tl = {}
+    t = time.perf_counter(); c10d._abort_process_group(); tl["t_abort_s"] = time.perf_counter() - t
+    t = time.perf_counter()
+    from sglang.multimodal_gen.runtime.distributed import parallel_state as ps
+    from sglang.multimodal_gen.runtime.distributed.group_coordinator import GroupCoordinator
+
+    # every coordinator (world, sp, replica, vae-decode, encoder-dp, ...) now spans this rank only;
+    # GroupCoordinator ops short-circuit at world_size == 1, so no collective is issued any more.
+    # Global .rank is kept: the executor's "main rank" test (rank == 0) must stay true here.
+    shrunk = []
+    for name, obj in vars(ps).items():
+        if isinstance(obj, GroupCoordinator) and obj.world_size > 1:
+            obj.world_size = 1; obj.rank_in_group = 0; obj.ranks = [obj.rank]
+            for attr, val in (("ulysses_world_size", 1), ("ulysses_rank", 0), ("ring_world_size", 1), ("ring_rank", 0)):
+                if hasattr(obj, attr):
+                    setattr(obj, attr, val)
+            shrunk.append(name)
+    tl["coordinators_shrunk"] = shrunk
+    # the DiT cached the SP degree at construction (WanModel.sp_size) and shards internally
+    # iff forward_batch.enable_sequence_shard and sp_size > 1; this request runs unsharded now
+    n_mod = 0
+    for m in (getattr(stage, "transformer", None), getattr(stage, "transformer_2", None)):
+        if m is None:
+            continue
+        for sub in m.modules():
+            if hasattr(sub, "sp_size") and isinstance(sub.sp_size, int):
+                sub.sp_size = 1; n_mod += 1
+    tl["modules_sp_size_reset"] = n_mod
+    try:
+        batch.enable_sequence_shard = False
+    except Exception as e:
+        tl["batch_flag_error"] = repr(e)[:120]
+    # inter-stage sync and request fan-out would wait on the dead peer forever (gloo has no abort)
+    dist.barrier = lambda *a, **k: None
+    n_bp = 0
+    for modname, mod in list(_sys.modules.items()):
+        if modname.startswith("sglang.multimodal_gen") and callable(getattr(mod, "broadcast_pyobj", None)):
+            mod.broadcast_pyobj = lambda obj, *a, **k: obj; n_bp += 1
+    tl["broadcast_pyobj_patched_modules"] = n_bp
+    for obj in gc.get_objects():
+        if type(obj).__name__ == "Scheduler" and hasattr(obj, "server_args"):
+            try:
+                obj.server_args.sp_degree = 1
+                if hasattr(obj, "task_pipes_to_slaves"):
+                    obj.task_pipes_to_slaves = []; obj.result_pipes_from_slaves = []
+                tl["scheduler_patched"] = True
+            except Exception as e:
+                tl["scheduler_patch_error"] = repr(e)[:120]
+    # free the peer's GPU: a stopped or wedged rank never comes back on its own
+    killed = []
+    try:
+        pids = json.load(open(run_dir() / "pids.json"))
+        for r, pid in pids.get("ranks", {}).items():
+            if int(r) != rank:
+                try:
+                    os.kill(int(pid), _sig.SIGCONT); os.kill(int(pid), _sig.SIGKILL); killed.append(int(pid))
+                except ProcessLookupError:
+                    pass
+    except Exception as e:
+        tl["kill_error"] = repr(e)[:120]
+    tl["peers_killed"] = killed
+    tl["t_reconfigure_s"] = time.perf_counter() - t
+    tl["cuda_mem_alloc_MiB"] = torch.cuda.memory_allocated() / 2**20 if torch.cuda.is_available() else None
+    _CONTAIN["failed_over"] = True
+    return tl
 
 
 # ---- Phase 3b-1: trajectory save / resume across processes and SP degrees --------------------
@@ -502,6 +651,10 @@ def _install_step_logger(rank: int) -> None:
         traj_save_step = int(os.environ["FT_TRAJ_SAVE_STEP"]) if os.environ.get("FT_TRAJ_SAVE_STEP") else None
         traj_resume = os.environ.get("FT_TRAJ_RESUME")
         traj_resume_step = int(os.environ.get("FT_TRAJ_RESUME_STEP", "-1"))
+        fail_step = int(os.environ["FT_FAIL_STEP"]) if os.environ.get("FT_FAIL_STEP") else None
+        fail_rank = int(os.environ.get("FT_FAIL_RANK", "1"))
+        fail_req = int(os.environ.get("FT_FAIL_REQ", "1"))
+        req_counter = {"n": 0}
 
         def _run_denoising_step(self, ctx, step, batch, server_args, *a, **k):
             si = getattr(step, "step_index", None)
@@ -516,9 +669,33 @@ def _install_step_logger(rank: int) -> None:
                 except Exception as e:
                     steps.write({"ev": "traj", "phase": "restore_failed", "error": repr(e)[:300]})
                     raise
+            if si == 0 and not getattr(ctx, "is_warmup", False):
+                req_counter["n"] += 1
+            if (fail_step is not None and si == fail_step and rank == fail_rank and req_counter["n"] == fail_req
+                    and not getattr(ctx, "is_warmup", False) and not _CONTAIN["injected"]):
+                # the failure: this rank freezes at the start of step k (SIGSTOP, as inject.py case B)
+                _CONTAIN["injected"] = True
+                steps.write({"ev": "fail_inject", "i": si, "t_ns": now_ns(), "pid": os.getpid(), "signal": "SIGSTOP"})
+                print(f"[ft-detect] FT_FAIL_STEP: rank {rank} stopping itself at step {si}", flush=True)
+                os.kill(os.getpid(), signal.SIGSTOP)
             t0 = now_ns()
             try:
                 r = orig_step(self, ctx, step, batch, server_args, *a, **k)
+            except PeerFailure as e:
+                t_fail = now_ns()
+                print(f"[ft-detect] FT_CONTAIN deadline miss at step {si}: {e}; failing over to SP1 in-process", flush=True)
+                steps.write({"ev": "contain", "phase": "deadline_miss", "i": si, "t0_ns": t0, "t_ns": t_fail, "error": str(e)[:200]})
+                try:
+                    tl = _failover_to_sp1(steps, self, batch, rank)
+                except BaseException as fe:
+                    steps.write({"ev": "contain", "phase": "failover_error", "i": si, "t_ns": now_ns(), "error": repr(fe)[:300]})
+                    raise
+                t_sw = now_ns()
+                steps.write({"ev": "contain", "phase": "failed_over", "i": si, "t_ns": t_sw, **tl})
+                print(f"[ft-detect] FT_CONTAIN failed over in {(t_sw - t_fail) / 1e6:.0f} ms (abort {tl.get('t_abort_s', 0) * 1e3:.0f} ms); re-running step {si} at SP1", flush=True)
+                r = orig_step(self, ctx, step, batch, server_args, *a, **k)
+                steps.write({"ev": "contain", "phase": "step_recomputed", "i": si, "t0_ns": t_sw, "t_ns": now_ns()})
+                print(f"[ft-detect] FT_CONTAIN step {si} recomputed at SP1 in {(now_ns() - t_sw) / 1e6:.0f} ms", flush=True)
             except BaseException as e:
                 steps.write({"ev": "step_exception", "i": getattr(step, "step_index", None), "t0_ns": t0,
                              "t_ns": now_ns(), "error": repr(e)[:300]})
@@ -624,6 +801,8 @@ def run_scheduler_process_wrapped(local_rank, rank, master_port, server_args, *a
         _install_step_logger(rank)
     except Exception as e:
         print(f"[ft-detect] step logger install failed: {e!r}", flush=True)
+    if os.environ.get("FT_CONTAIN", "0") == "1":
+        _install_containment(JsonlWriter(logs_dir() / f"steps_rank{rank}.jsonl"))
     if os.environ.get("FT_ABORT_PROBE", "0") == "1":
         if os.environ.get("FT_ABORT_MODE") == "coexist":
             def _baseline(w):

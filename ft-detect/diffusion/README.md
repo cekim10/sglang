@@ -243,3 +243,40 @@ NCCL_P2P_DISABLE=1 CUDA_VISIBLE_DEVICES=0,1 MAX_S=300 ./run_pair.sh discipline_b
 NCCL_P2P_DISABLE=1 CUDA_VISIBLE_DEVICES=0,1 MAX_S=300 ./run_pair.sh discipline_bench.py --shape zimage
 NCCL_P2P_DISABLE=1 CUDA_VISIBLE_DEVICES=0,1 MAX_S=240 OUT_DIR=results/pair_sp_switch_wan ./run_pair.sh sp_switch_probe.py --shape wan --steps 12 --fail-step 5 --deadline-s 2
 ```
+
+## Test 3: failure-contained execution inside SGLang Diffusion (Wan, SP=2 -> SP=1 in-process)
+
+Everything from Test 1 and Test 2, applied to the real server through `launch_wrapped_diff.py`
+(monkeypatches only; SGLang is not modified):
+
+- `FT_CONTAIN=1` wraps `torch.distributed.{all_to_all_single, all_gather_into_tensor, all_gather,
+  all_reduce, broadcast}` (and the `all_gather_single` alias the diffusion runtime bound at import):
+  every collective is issued with `async_op=True` and polled under `FT_CONTAIN_DEADLINE_S`
+  (default 5 s inside a request, 900 s outside one), so the CPU never issues a dependent kernel
+  behind an unfinished collective. A miss raises `PeerFailure` inside the DiT forward.
+- The `_run_denoising_step` hook catches it and, in the same process: `_abort_process_group()`
+  (all groups), shrinks every `GroupCoordinator` in `parallel_state` to world size 1 (their ops
+  short-circuit at 1; the global `.rank` is kept so the executor's main-rank checks still hold),
+  resets the DiT's cached `sp_size`, sets `enable_sequence_shard=False` on the request, no-ops
+  `dist.barrier` and `broadcast_pyobj` (gloo cannot be aborted; the executor syncs after every stage
+  and the scheduler fans requests out through them), kills the peer, and re-runs the same step.
+  Wan's loop-level latents are replicated, so the boundary state is already complete locally.
+- `FT_FAIL_STEP=k FT_FAIL_RANK=1 FT_FAIL_REQ=2`: rank 1 SIGSTOPs itself at step k of its second
+  non-warmup request (the deterministic injection; inject.py case B is the time-based alternative).
+
+```bash
+export CUDA_VISIBLE_DEVICES=0,1 NCCL_P2P_DISABLE=1 SGLANG_DIFFUSION_IPC_A2A=false MODEL=Wan-AI/Wan2.2-TI2V-5B-Diffusers
+MODE=sp1ref ./run_contain.sh                       # SP=1 reference: output + latency (NGPU=1)
+MODE=ours   N=3 ./run_contain.sh                   # ref request -> failing request (contained) -> next request at SP=1
+MODE=stock  ./run_contain.sh                       # optional: same injection without containment (bounded 700 s)
+python contain_report.py runs/contain_ours_* --sp1ref 'runs/contain_sp1ref_*' --md results/test3_contain.md --csv results/test3_contain.csv
+```
+
+Each run records `T_detect` (freeze -> deadline miss), `T_abort`, `T_switch`, `T_recompute`, the
+SP=1 step time inside the failed request, `T_added` (failing request minus the SP=2 reference in
+the same server), the latency of the next request served by the surviving process, and the final
+latents of every request. Output check: `relerr_vs_sp1ref` of the contained request against the
+control `control_sp1_vs_sp2` (the SP=1 and SP=2 references differ numerically on their own).
+PASS = the failing request completes with an error within the control and the next request is
+served at SP=1 by the same process. If the rank dies right after the abort, retry with
+`TORCH_NCCL_ASYNC_ERROR_HANDLING=0` (torch's documented setting for `_abort_process_group`).
