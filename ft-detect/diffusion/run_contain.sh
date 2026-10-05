@@ -17,6 +17,9 @@
 #   DEADLINE_S   default 5 (FT_CONTAIN_DEADLINE_S; the step time at this shape is ~0.7 s)
 #   ABORT        stuck (default) | world | none   which communicators to abort (see abort_matrix_probe.py)
 #   FENCE_FIRST  default 1: kill the peer before the abort   ABORT_TIMEOUT_S default 10 (bounded abort)
+#   ENCODER_PARALLEL default replicate (-> --encoder-parallel). SGLang's default `auto` folds the
+#                text encoder's weights across the SP group (tp=1, sp>1), so after a failover the
+#                surviving rank holds half an encoder; containment needs weight-replicated components.
 #   TORCH_NCCL_ASYNC_ERROR_HANDLING defaults to 0 in MODE=ours (torch's documented setting for abort;
 #                otherwise the NCCL watchdog tears the surviving rank down at 600 s if an abort stalls)
 #   N            default 1 runs           RUNS_DIR / RESULTS_DIR as elsewhere
@@ -28,6 +31,7 @@ MODE=${MODE:-ours}
 SHAPE=${SHAPE:-832x480x81}; STEPS=${STEPS:-9}; SEED=${SEED:-1234}
 FAIL_STEP=${FAIL_STEP:-4}; DEADLINE_S=${DEADLINE_S:-5}
 ABORT=${ABORT:-stuck}; FENCE_FIRST=${FENCE_FIRST:-1}; ABORT_TIMEOUT_S=${ABORT_TIMEOUT_S:-10}
+ENCODER_PARALLEL=${ENCODER_PARALLEL:-replicate}
 N=${N:-1}; STOCK_WAIT=${STOCK_WAIT:-700}
 RUNS_DIR=${RUNS_DIR:-$HERE/runs}; RESULTS_DIR=${RESULTS_DIR:-$HERE/results}
 PYTHON=${PYTHON:-python}
@@ -53,12 +57,14 @@ for i in $(seq 1 "$N"); do
   export FT_RUN_DIR="$RUN" FT_TRAJ_SAVE_DIR="$RUN/traj"
   mkdir -p "$RUN/logs" "$RUN/outputs"
   echo "=============== [Test 3] mode=$MODE shape=$SHAPE steps=$STEPS fail_step=$FAIL_STEP deadline=${DEADLINE_S}s run $i/$N -> $RUN"
-  echo "{\"mode\":\"$MODE\",\"shape\":\"$SHAPE\",\"steps\":$STEPS,\"seed\":$SEED,\"fail_step\":$FAIL_STEP,\"deadline_s\":$DEADLINE_S,\"abort\":\"$ABORT\",\"fence_first\":$FENCE_FIRST,\"abort_timeout_s\":$ABORT_TIMEOUT_S,\"nccl_async_error_handling\":\"${TORCH_NCCL_ASYNC_ERROR_HANDLING:-0}\"}" > "$RUN/contain_env.json"
+  echo "{\"mode\":\"$MODE\",\"shape\":\"$SHAPE\",\"steps\":$STEPS,\"seed\":$SEED,\"fail_step\":$FAIL_STEP,\"deadline_s\":$DEADLINE_S,\"abort\":\"$ABORT\",\"fence_first\":$FENCE_FIRST,\"abort_timeout_s\":$ABORT_TIMEOUT_S,\"nccl_async_error_handling\":\"${TORCH_NCCL_ASYNC_ERROR_HANDLING:-0}\",\"encoder_parallel\":\"$ENCODER_PARALLEL\"}" > "$RUN/contain_env.json"
   case "$MODE" in
     ours)   export FT_CONTAIN=1 FT_CONTAIN_DEADLINE_S="$DEADLINE_S" FT_FAIL_STEP="$FAIL_STEP" FT_FAIL_RANK=1 FT_FAIL_REQ=3 FT_FAIL_SHAPE="$SHAPE"
             export FT_CONTAIN_ABORT="$ABORT" FT_CONTAIN_FENCE_FIRST="$FENCE_FIRST" FT_CONTAIN_ABORT_TIMEOUT_S="$ABORT_TIMEOUT_S"
-            export TORCH_NCCL_ASYNC_ERROR_HANDLING="${TORCH_NCCL_ASYNC_ERROR_HANDLING:-0}"; L="$HERE/launch_diff.sh" ;;
-    stock)  unset FT_CONTAIN; export FT_FAIL_STEP="$FAIL_STEP" FT_FAIL_RANK=1 FT_FAIL_REQ=3 FT_FAIL_SHAPE="$SHAPE"; L="$HERE/launch_diff.sh" ;;
+            export TORCH_NCCL_ASYNC_ERROR_HANDLING="${TORCH_NCCL_ASYNC_ERROR_HANDLING:-0}"
+            export EXTRA_ARGS="${EXTRA_ARGS:-} --encoder-parallel $ENCODER_PARALLEL"; L="$HERE/launch_diff.sh" ;;
+    stock)  unset FT_CONTAIN; export FT_FAIL_STEP="$FAIL_STEP" FT_FAIL_RANK=1 FT_FAIL_REQ=3 FT_FAIL_SHAPE="$SHAPE"
+            export EXTRA_ARGS="${EXTRA_ARGS:-} --encoder-parallel $ENCODER_PARALLEL"; L="$HERE/launch_diff.sh" ;;
     sp1ref) unset FT_CONTAIN FT_FAIL_STEP; L="env NGPU=1 PARALLEL_ARGS= CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES%%,*} $HERE/launch_diff.sh" ;;
     *) echo "unknown MODE=$MODE"; exit 2 ;;
   esac

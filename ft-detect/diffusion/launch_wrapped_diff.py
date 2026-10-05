@@ -327,7 +327,20 @@ def _fence_peers(rank: int) -> list:
     return killed
 
 
-def _failover_to_sp1(steps, stage, batch, rank: int, stuck_group=None) -> dict:
+def _sharded_components(server_args) -> list:
+    """Components whose weights are split across ranks: they cannot shrink to one rank in place."""
+    out = []
+    pc = server_args.pipeline_config
+    for i, cfg in enumerate(list(pc.text_encoder_configs) + [pc.image_encoder_config]):
+        mode = getattr(cfg, "parallel_folding_mode", None) if cfg is not None else None
+        if mode is not None:
+            out.append(f"encoder[{i}]:fold={mode}")
+    if server_args.tp_size > 1:
+        out.append(f"dit:tp={server_args.tp_size}")
+    return out
+
+
+def _failover_to_sp1(steps, stage, batch, rank: int, stuck_group=None, server_args=None) -> dict:
     """Fence the peer, abort the stuck communicator, and reconfigure this process to run alone.
 
     FT_CONTAIN_ABORT: stuck (default; only the group whose collective missed the deadline) |
@@ -346,7 +359,16 @@ def _failover_to_sp1(steps, stage, batch, rank: int, stuck_group=None) -> dict:
         print(f"[ft-detect] FT_CONTAIN failover: {what} at +{(time.perf_counter() - t_start) * 1e3:.0f} ms", flush=True)
 
     t_start = time.perf_counter()
-    tl = {"abort_mode": os.environ.get("FT_CONTAIN_ABORT", "stuck"),
+    if server_args is not None:
+        try:
+            sharded = _sharded_components(server_args)
+        except Exception as e:
+            sharded = [f"check_error:{type(e).__name__}"]
+        if sharded:
+            print(f"[ft-detect] FT_CONTAIN WARNING: weight-sharded components cannot run on one rank: {sharded}", flush=True)
+    else:
+        sharded = None
+    tl = {"sharded_components": sharded, "abort_mode": os.environ.get("FT_CONTAIN_ABORT", "stuck"),
           "fence_first": os.environ.get("FT_CONTAIN_FENCE_FIRST", "1") == "1"}
     if tl["fence_first"]:
         tl["peers_killed"] = _fence_peers(rank); mark(f"fenced {tl['peers_killed']}")
@@ -743,7 +765,7 @@ def _install_step_logger(rank: int) -> None:
                 print(f"[ft-detect] FT_CONTAIN deadline miss at step {si}: {e}; failing over to SP1 in-process", flush=True)
                 steps.write({"ev": "contain", "phase": "deadline_miss", "i": si, "t0_ns": t0, "t_ns": t_fail, "error": str(e)[:200]})
                 try:
-                    tl = _failover_to_sp1(steps, self, batch, rank, stuck_group=e.group)
+                    tl = _failover_to_sp1(steps, self, batch, rank, stuck_group=e.group, server_args=server_args)
                 except BaseException as fe:
                     steps.write({"ev": "contain", "phase": "failover_error", "i": si, "t_ns": now_ns(), "error": repr(fe)[:300]})
                     raise

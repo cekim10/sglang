@@ -299,3 +299,16 @@ The wrapper now fences the peer first, aborts only the stuck group by default
 (`ABORT=stuck|world|none`), bounds the abort (`ABORT_TIMEOUT_S`, stacks dumped to the rank log on
 a hang), prints a timestamp per failover sub-step, and the failing request is bounded by
 `REQ_TIMEOUT` (300 s) so a hang ends the run. Pick `ABORT` from the matrix.
+
+### Test 3 run 2 finding: weight-sharded components break the shrink
+
+With the stuck-group abort and fence-first the failover completed in 0.59 s and the failing request
+finished correctly. The next request, served by the same process at SP=1, returned an output whose
+final latents differ from the SP=1 reference by 1.15 (control 0.09). Cause: with tp=1 and sp>1,
+`--encoder-parallel auto` folds the text encoder's weights across the SP group for the model's
+lifetime, so after the shrink rank 0 encodes with half the weights and the per-layer all-reduce
+short-circuits. The failing request was unaffected because its text conditioning was computed
+before the failure. Containment therefore needs every component the survivor runs to be
+weight-replicated (Ulysses SP for the DiT, `--encoder-parallel replicate|dp` for encoders);
+`run_contain.sh` now launches with `ENCODER_PARALLEL=replicate` and the failover logs any
+weight-sharded component it finds.

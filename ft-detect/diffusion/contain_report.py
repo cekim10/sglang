@@ -101,6 +101,18 @@ def analyze(run: Path, sp1ref: Path | None) -> dict:
     lat = run / "latents"
     if (lat / "fail_final_rank0.pt").exists() and (lat / "ref_final_rank0.pt").exists():
         row["relerr_vs_sp2ref"] = _rel_err(lat / "fail_final_rank0.pt", lat / "ref_final_rank0.pt")
+    if (lat / "after_final_rank0.pt").exists():
+        if (lat / "ref_final_rank0.pt").exists():
+            row["after_vs_sp2ref"] = _rel_err(lat / "after_final_rank0.pt", lat / "ref_final_rank0.pt")
+        if (lat / "fail_final_rank0.pt").exists():
+            row["after_vs_fail"] = _rel_err(lat / "after_final_rank0.pt", lat / "fail_final_rank0.pt")
+    hashes = {ph: _load(run / f"resp_{ph}.json").get("sha256") for ph in ("ref", "fail", "after")}
+    if hashes["ref"]:
+        row["fail_hash_eq_ref"] = hashes["fail"] == hashes["ref"] if hashes["fail"] else None
+        row["after_hash_eq_ref"] = hashes["after"] == hashes["ref"] if hashes["after"] else None
+    row["encoder_parallel"] = env.get("encoder_parallel", "auto (pre-2026-10-05 runs)")
+    if fo:
+        row["sharded_components"] = ",".join(fo.get("sharded_components") or []) if fo.get("sharded_components") is not None else None
     if sp1ref is not None:
         s1 = sp1ref / "latents" / "ref_final_rank0.pt"
         j = _load(sp1ref / "resp_ref.json")
@@ -138,7 +150,9 @@ def main():
     rows = [analyze(Path(r), sp1) for r in a.runs if Path(r).is_dir()]
     cols_timeline = ["run", "shape", "steps", "fail_step", "deadline_s", "abort_mode", "fence_first", "abort_finished", "T_detect_s", "T_abort_s", "T_switch_s", "T_recompute_s",
                      "sp2_step_ms_median", "sp1_step_ms_median", "ref_latency_s", "fail_latency_s", "T_added_s", "after_latency_s", "sp1ref_latency_s"]
-    cols_output = ["run", "injected", "rank1_after_fail", "fail_ok", "after_ok", "relerr_vs_sp2ref", "relerr_vs_sp1ref", "control_sp1_vs_sp2", "after_vs_sp1ref",
+    cols_output = ["run", "encoder_parallel", "sharded_components", "injected", "rank1_after_fail", "fail_ok", "after_ok",
+                   "fail_hash_eq_ref", "after_hash_eq_ref", "relerr_vs_sp2ref", "relerr_vs_sp1ref", "control_sp1_vs_sp2",
+                   "after_vs_sp2ref", "after_vs_fail", "after_vs_sp1ref",
                    "coordinators_shrunk", "peers_killed", "modules_sp_size_reset", "errors", "fail_error", "after_error"]
     out = ["# Test 3: in-process failure containment (SGLang Diffusion, Wan SP=2 -> SP=1)", "",
            "Timeline (s): T_detect = rank-1 freeze -> deadline miss on rank 0; T_switch = miss -> failed over "
@@ -153,7 +167,8 @@ def main():
             "frozen peer (Phase 2: 600.2 s to the torch watchdog, request lost, replica never evicted); "
             "kill -> cold restart of the rank is ~37 s to ready (startup_decomp.md) plus the lost request.",
             "Verdict rule: PASS if the failing request completes with relerr_vs_sp1ref within the control "
-            "(SP=1 vs SP=2 references) and the next request is served by the same process at SP=1.", ""]
+            "(SP=1 vs SP=2 references) and the next request is served by the same process at SP=1 with "
+            "after_vs_sp1ref also within the control (a fast but wrong next request is a FAIL).", ""]
     txt = "\n".join(out)
     if a.md:
         Path(a.md).parent.mkdir(parents=True, exist_ok=True); Path(a.md).write_text(txt)
