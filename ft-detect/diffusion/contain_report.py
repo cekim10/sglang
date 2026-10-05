@@ -78,6 +78,12 @@ def analyze(run: Path, sp1ref: Path | None) -> dict:
     if pre:
         warm = pre[1:] or pre
         row["sp2_step_ms_median"] = sorted((r["t_ns"] - r["t0_ns"]) / 1e6 for r in warm)[len(warm) // 2]
+    counts = [r for r in r1 if r.get("ev") == "fail_req_count"]
+    if counts:
+        row["rank1_req_count"] = counts[-1].get("n")
+    rs = read_jsonl(run / "rank_states.jsonl") if (run / "rank_states.jsonl").exists() else []
+    for r in rs:
+        row[f"rank1_{r['tag']}"] = r["states"].get("1")
     exc = [r for r in r0 if r.get("ev") in ("step_exception",) or (r.get("ev") == "contain" and "error" in r.get("phase", ""))]
     if exc:
         row["errors"] = "; ".join(str(r.get("error"))[:120] for r in exc[:3])
@@ -130,7 +136,7 @@ def main():
     rows = [analyze(Path(r), sp1) for r in a.runs if Path(r).is_dir()]
     cols_timeline = ["run", "shape", "steps", "fail_step", "deadline_s", "T_detect_s", "T_abort_s", "T_switch_s", "T_recompute_s",
                      "sp2_step_ms_median", "sp1_step_ms_median", "ref_latency_s", "fail_latency_s", "T_added_s", "after_latency_s", "sp1ref_latency_s"]
-    cols_output = ["run", "fail_ok", "after_ok", "relerr_vs_sp2ref", "relerr_vs_sp1ref", "control_sp1_vs_sp2", "after_vs_sp1ref",
+    cols_output = ["run", "injected", "rank1_after_fail", "fail_ok", "after_ok", "relerr_vs_sp2ref", "relerr_vs_sp1ref", "control_sp1_vs_sp2", "after_vs_sp1ref",
                    "coordinators_shrunk", "peers_killed", "modules_sp_size_reset", "errors", "fail_error", "after_error"]
     out = ["# Test 3: in-process failure containment (SGLang Diffusion, Wan SP=2 -> SP=1)", "",
            "Timeline (s): T_detect = rank-1 freeze -> deadline miss on rank 0; T_switch = miss -> failed over "

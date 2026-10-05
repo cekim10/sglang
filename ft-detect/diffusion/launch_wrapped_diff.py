@@ -18,8 +18,9 @@ Test 3 (FT_CONTAIN=1): failure-contained execution. Collectives are issued async
 under FT_CONTAIN_DEADLINE_S (default 5 s); a miss inside a request aborts the process groups,
 shrinks every group coordinator to this rank, disables the DiT's internal sequence shard,
 kills the peer and re-runs the same step at SP=1 in the same process (see README, Test 3).
-FT_FAIL_STEP=k FT_FAIL_RANK=r FT_FAIL_REQ=n: rank r SIGSTOPs itself at step k of its n-th
-non-warmup request (the deterministic injection used by run_contain.sh).
+FT_FAIL_STEP=k FT_FAIL_RANK=r FT_FAIL_REQ=n [FT_FAIL_SHAPE=WxHxF]: rank r SIGSTOPs itself at
+step k of its n-th non-warmup request of that shape (the deterministic injection used by
+run_contain.sh; the shape filter keeps probe/other requests from advancing the count).
 
 Usage: same CLI as `python -m sglang.multimodal_gen.runtime.launch_server`, e.g.
     python launch_wrapped_diff.py --model-path black-forest-labs/FLUX.1-dev --num-gpus 2 --sp-degree 2 --port 30000
@@ -654,7 +655,15 @@ def _install_step_logger(rank: int) -> None:
         fail_step = int(os.environ["FT_FAIL_STEP"]) if os.environ.get("FT_FAIL_STEP") else None
         fail_rank = int(os.environ.get("FT_FAIL_RANK", "1"))
         fail_req = int(os.environ.get("FT_FAIL_REQ", "1"))
+        fail_shape = os.environ.get("FT_FAIL_SHAPE")   # WxH[xF]: only requests of this shape count
         req_counter = {"n": 0}
+
+        def _counts(batch) -> bool:
+            if not fail_shape:
+                return True
+            d = _shape_of(batch)
+            got = f"{d.get('w')}x{d.get('h')}" + (f"x{d.get('nf')}" if (d.get("nf") or 1) > 1 else "")
+            return got == fail_shape
 
         def _run_denoising_step(self, ctx, step, batch, server_args, *a, **k):
             si = getattr(step, "step_index", None)
@@ -669,10 +678,12 @@ def _install_step_logger(rank: int) -> None:
                 except Exception as e:
                     steps.write({"ev": "traj", "phase": "restore_failed", "error": repr(e)[:300]})
                     raise
-            if si == 0 and not getattr(ctx, "is_warmup", False):
+            counted = fail_step is not None and not getattr(ctx, "is_warmup", False) and _counts(batch)
+            if counted and si == 0:
                 req_counter["n"] += 1
-            if (fail_step is not None and si == fail_step and rank == fail_rank and req_counter["n"] == fail_req
-                    and not getattr(ctx, "is_warmup", False) and not _CONTAIN["injected"]):
+                steps.write({"ev": "fail_req_count", "n": req_counter["n"], "target": fail_req, **_shape_of(batch)})
+            if (counted and si == fail_step and rank == fail_rank and req_counter["n"] == fail_req
+                    and not _CONTAIN["injected"]):
                 # the failure: this rank freezes at the start of step k (SIGSTOP, as inject.py case B)
                 _CONTAIN["injected"] = True
                 steps.write({"ev": "fail_inject", "i": si, "t_ns": now_ns(), "pid": os.getpid(), "signal": "SIGSTOP"})
