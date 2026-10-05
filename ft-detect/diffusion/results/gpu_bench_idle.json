@@ -1,0 +1,36 @@
+{
+ "t_start": 1791171156.9080462,
+ "cuda_init_ms": 10.511312633752823,
+ "runs": [
+  {
+   "device_name": "NVIDIA L40S",
+   "alloc_init_ms": 2.2509880363941193,
+   "launch_ms": 0.29671937227249146,
+   "matmul_ms": 0.5131274541219075,
+   "memset_256MiB_ms": 0.4270080029964447,
+   "d2h_64MiB_ms": 2.7464640140533447,
+   "free_MiB": 44554,
+   "total_MiB": 45458
+  },
+  {
+   "device_name": "NVIDIA L40S",
+   "alloc_init_ms": 0.1440085470676422,
+   "launch_ms": 0.21034479141235352,
+   "matmul_ms": 0.5124778747558594,
+   "memset_256MiB_ms": 0.3572480082511902,
+   "d2h_64MiB_ms": 2.5733439922332764,
+   "free_MiB": 44554,
+   "total_MiB": 45458
+  },
+  {
+   "device_name": "NVIDIA L40S",
+   "alloc_init_ms": 0.14358758926391602,
+   "launch_ms": 0.22316724061965942,
+   "matmul_ms": 0.5137407938639323,
+   "memset_256MiB_ms": 0.3655039966106415,
+   "d2h_64MiB_ms": 2.588576078414917,
+   "free_MiB": 44554,
+   "total_MiB": 45458
+  }
+ ]
+}

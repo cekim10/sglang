@@ -14,9 +14,13 @@
 | diff_B_r1_1_20261003-215259 | Wan-AI/Wan2.2-TI2V-5B-Diffusers | 2 | absent | default | default | sglang-diffusion | mixed | 0.376 | inject | B | 1 | -0.976 |  |  | 0.041 | 10.066 | log:ft_abort_miss@rank0.log |  |  |  | 3.839 |  |  | 0 | 0 | 10.066 | 17 | 4 | 4 | 48696.0 | 55292.9 | 2 |  |  | 0 | False | True | False | True |
 | diff_B_r1_2_20261003-220035 | Wan-AI/Wan2.2-TI2V-5B-Diffusers | 2 | absent | default | default | sglang-diffusion | mixed | 0.376 | inject | B | 1 | -2.093 |  |  | 0.087 | 10.026 | log:ft_abort_miss@rank0.log |  |  |  | 4.094 |  |  | 0 | 0 | 10.026 | 17 | 4 | 4 | 46470.2 | 57281.6 | 2 |  |  | 0 | False | True | False | True |
 | diff_B_r1_1_20261003-221215 | Wan-AI/Wan2.2-TI2V-5B-Diffusers | 2 | absent | default | default | sglang-diffusion | mixed | 0.376 | inject | B | 1 | -2.285 |  |  | 0.033 | 10.072 | log:ft_abort_miss@rank0.log |  |  |  | 3.922 | 123.968 |  | 0 | 0 | 10.072 | 17 | 4 | 4 | 46265.6 | 57086.2 | 2 |  |  | 0 | False | True | False | True |
+| diff_B_r1_1_20261004-174800 | Wan-AI/Wan2.2-TI2V-5B-Diffusers | 2 | absent | default | default | sglang-diffusion | mixed | 0.376 | inject | B | 1 | -0.311 |  |  | 0.059 | 10.512 | log:ft_abort_miss@rank0.log |  |  |  | 8.868 |  |  | 0 | 1 | 10.512 | 20 | 7 | 7 |  |  | 0 |  |  | 0 | False | True | False | True |
+| diff_B_r1_1_20261004-175756 | Wan-AI/Wan2.2-TI2V-5B-Diffusers | 2 | absent | default | default | sglang-diffusion | mixed | 0.376 | inject | B | 1 | -0.385 |  |  | 0.096 | 10.52 | log:ft_abort_miss@rank0.log |  |  |  | 9.019 | 69.1 |  | 0 | 1 | 10.52 | 20 | 7 | 7 |  |  | 0 |  |  | 0 | False | True | False | True |
+| diff_B_r1_1_20261004-180858 | Wan-AI/Wan2.2-TI2V-5B-Diffusers | 2 | absent | default | default | sglang-diffusion | mixed | 0.376 | inject | B | 1 | -0.371 |  |  | 0.068 | 10.485 | log:ft_abort_miss@rank0.log |  |  |  | 12.293 | 72.324 |  | 0 | 1 | 10.485 | 20 | 7 | 7 |  |  | 0 |  |  | 0 | False | True | False | True |
+| diff_B_r1_1_20261004-203240 | Wan-AI/Wan2.2-TI2V-5B-Diffusers | 2 | absent | default | default | sglang-diffusion | mixed | 0.376 | inject | B | 1 | -0.481 |  |  | 0.041 | 10.379 | log:ft_abort_miss@rank0.log |  |  |  | 8.87 | 68.951 |  | 0 | 1 | 10.379 | 20 | 7 | 7 |  |  | 0 |  |  | 0 | False | True | False | True |
 
 ### T_detect per case (seconds after t_inject, median over runs)
 
 | case | watchdog_timeout | runs | t_first_symptom_med | t_detect_engine_med | t_detect_engine_min | t_detect_engine_max | t_detect_health_med | t_detect_gen1_med | n_inflight_hung_med | n_new_errored_med |
 |---|---|---|---|---|---|---|---|---|---|---|
-| B | absent | 12 | -0.89 | 10.13 | 10.03 | 600.28 |  | 55.09 | 25.5 | 4.0 |
+| B | absent | 16 | -0.5 | 10.34 | 10.03 | 600.28 |  | 32.45 | 20.0 | 7.0 |
