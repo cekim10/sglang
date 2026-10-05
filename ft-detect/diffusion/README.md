@@ -207,3 +207,18 @@ CUDA_VISIBLE_DEVICES=0 python gpu_bench.py --out results/gpu_bench_idle.json    
 FT_EXTERNAL_BENCH=1 FT_ABORT_PROBE=1 FT_ABORT_MODE=coexist FT_ABORT_DEADLINE_S=10 MIN_WARMUP=100 STEADY_WAIT=60 MAX_DETECT_WAIT=60 POST_GRACE=60 ./run_case_diff.sh B 1 1
 cat runs/diff_B_r1_1_*/external_bench_during_hang.json | python -c "import json,sys; d=json.load(sys.stdin); print(d['cuda_init_ms'], [r['matmul_ms'] for r in d['runs']], d['runs'][0]['free_MiB'])"
 ```
+
+## Option-3 probe: issuing discipline vs the poisoned context
+
+`run_launch_discipline.sh` runs two bare NCCL ranks (no SGLang). Rank 1 freezes after warm-up so
+rank 0's next all-to-all can never finish. In `flood` mode rank 0 keeps launching on the same
+stream (what a DiT forward does) and we count how many launches fit before `cudaLaunchKernel`
+blocks; in `disciplined` mode rank 0 enqueues the collective, records an event, polls it without
+issuing anything else, and after the deadline tries `_abort_process_group`, a fresh launch on the
+main stream, and `destroy_process_group`. A side thread benchmarks its own stream throughout.
+If the side stream stays healthy and the escape hatches return in `disciplined` mode, the
+B3-1 result was a consequence of run-ahead issuing, not of the stuck collective itself.
+
+```bash
+NCCL_P2P_DISABLE=1 CUDA_VISIBLE_DEVICES=0,1 ./run_launch_discipline.sh both
+```
