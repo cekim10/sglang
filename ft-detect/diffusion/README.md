@@ -222,3 +222,24 @@ B3-1 result was a consequence of run-ahead issuing, not of the stuck collective 
 ```bash
 NCCL_P2P_DISABLE=1 CUDA_VISIBLE_DEVICES=0,1 ./run_launch_discipline.sh both
 ```
+
+## Test 1 / Test 2: failure-containable issuing and in-process SP2 -> SP1 continuation (standalone)
+
+Both are bare `torch.distributed` programs run by `run_pair.sh` (rank 0 on the first visible GPU,
+rank 1 on the second), using a Ulysses-shaped layer with deterministic weights; the SP2 math was
+checked against the SP1 math on CPU (bit-exact).
+
+- `discipline_bench.py`: steady-state cost of never launching behind an unfinished collective.
+  `baseline` issues run-ahead after a synchronous all-to-all; `contained` polls `work.is_completed()`
+  before the next dependent kernel. Reports `O = T_contained / T_baseline - 1` with the agreed gate
+  (<=3% pass, 3-10% pass/interesting, 10-20% gray, >20% naive discipline fails).
+- `sp_switch_probe.py`: rank 1 freezes at the start of step k; rank 0 hits its poll deadline, aborts
+  the process group, recomputes step k from the replicated boundary state at SP1 in the same
+  process and finishes the remaining steps; reports T_detect, T_abort, T_first_sp1_step and the
+  continued result against SP1 and SP2 references.
+
+```bash
+NCCL_P2P_DISABLE=1 CUDA_VISIBLE_DEVICES=0,1 MAX_S=300 ./run_pair.sh discipline_bench.py --shape wan
+NCCL_P2P_DISABLE=1 CUDA_VISIBLE_DEVICES=0,1 MAX_S=300 ./run_pair.sh discipline_bench.py --shape zimage
+NCCL_P2P_DISABLE=1 CUDA_VISIBLE_DEVICES=0,1 MAX_S=240 OUT_DIR=results/pair_sp_switch_wan ./run_pair.sh sp_switch_probe.py --shape wan --steps 12 --fail-step 5 --deadline-s 2
+```
