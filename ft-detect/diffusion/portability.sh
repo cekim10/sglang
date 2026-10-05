@@ -44,13 +44,18 @@ run_cfg() {  # name ngpu parallel_args extra_env...
   return $rc
 }
 
-run_cfg sp2_save  2 "--sp-degree 2 --ulysses-degree 2" FT_TRAJ_SAVE_STEP="$K" || { echo "sp2_save failed"; exit 1; }
+# CFGS="sp1_full sp1_lower" reruns a subset against the existing sp2_save state (default: all five).
+CFGS=${CFGS:-"sp2_save sp1_ref sp1_ref2 sp1_full sp1_lower"}
+want() { case " $CFGS " in *" $1 "*) return 0;; *) return 1;; esac; }
 TRAJ="$D/sp2_save/traj_step${K}_rank0.pt"
+if want sp2_save; then
+  run_cfg sp2_save  2 "--sp-degree 2 --ulysses-degree 2" FT_TRAJ_SAVE_STEP="$K" || { echo "sp2_save failed"; exit 1; }
+fi
 [ -e "$TRAJ" ] || { echo "no trajectory file $TRAJ (check $D/sp2_save/steps_rank0.jsonl for traj records)"; exit 1; }
-run_cfg sp1_ref   1 "" || echo "sp1_ref failed"
-run_cfg sp1_ref2  1 "" || echo "sp1_ref2 failed"
-run_cfg sp1_full  1 "" FT_TRAJ_RESUME="$TRAJ" FT_TRAJ_RESUME_STEP="$K" FT_TRAJ_MODE=full  || echo "sp1_full failed"
-run_cfg sp1_lower 1 "" FT_TRAJ_RESUME="$TRAJ" FT_TRAJ_RESUME_STEP="$K" FT_TRAJ_MODE=lower || echo "sp1_lower failed"
+want sp1_ref   && { run_cfg sp1_ref   1 "" || echo "sp1_ref failed"; }
+want sp1_ref2  && { run_cfg sp1_ref2  1 "" || echo "sp1_ref2 failed"; }
+want sp1_full  && { run_cfg sp1_full  1 "" FT_TRAJ_RESUME="$TRAJ" FT_TRAJ_RESUME_STEP="$K" FT_TRAJ_MODE=full  || echo "sp1_full failed"; }
+want sp1_lower && { run_cfg sp1_lower 1 "" FT_TRAJ_RESUME="$TRAJ" FT_TRAJ_RESUME_STEP="$K" FT_TRAJ_MODE=lower || echo "sp1_lower failed"; }
 
 "$PYTHON" "$HERE/trajectory_compare.py" "$D" --md "$D/compare.md"
 echo "[portability] done: $D/compare.md"

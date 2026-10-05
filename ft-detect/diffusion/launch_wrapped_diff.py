@@ -236,10 +236,11 @@ def _traj_restore(ctx, batch, device):
     ctx.latents = lat.contiguous()
     sch = ctx.scheduler
     for name, v in saved["scheduler"].items():
-        if not hasattr(sch, name):
-            continue
+        # Solver state is injected even when the fresh scheduler has not created the attribute
+        # yet (UniPC sets this_order inside its first step(); a restored lower_order_nums > 0
+        # makes it read this_order on the very next step).
         if mode == "lower" and name in ("model_outputs", "last_sample", "timestep_list", "lower_order_nums", "this_order"):
-            cur = getattr(sch, name)
+            cur = getattr(sch, name, None)
             if name == "model_outputs" and isinstance(cur, list):
                 setattr(sch, name, [None] * len(cur))
             elif name == "timestep_list" and isinstance(cur, list):
