@@ -1,0 +1,117 @@
+{
+ "log": [
+  {
+   "t": 0.4672,
+   "ev": "init",
+   "rank": 0,
+   "cfg": {
+    "tokens": 8192,
+    "hidden": 3072,
+    "heads": 24,
+    "layers": 8
+   },
+   "steps": 12,
+   "fail_step": 5
+  },
+  {
+   "t": 2.2915,
+   "ev": "reference_sp1_done",
+   "step_s": 0.1473,
+   "finite": true,
+   "scale": 28.5
+  },
+  {
+   "t": 4.5298,
+   "ev": "reference_sp2_done",
+   "step_s": 0.1654
+  },
+  {
+   "t": 4.5668,
+   "ev": "control",
+   "exact": true,
+   "max_abs": 0.0,
+   "rel_l2": 0.0
+  },
+  {
+   "t": 7.3043,
+   "ev": "deadline_miss",
+   "step": 5,
+   "after_s": 2.0,
+   "msg": "all-to-all not complete after 2.0s"
+  },
+  {
+   "t": 7.9202,
+   "ev": "abort_done",
+   "T_abort_s": 0.616
+  },
+  {
+   "t": 8.0447,
+   "ev": "first_sp1_step_done",
+   "T_first_sp1_step_s": 0.124
+  },
+  {
+   "t": 8.8353,
+   "ev": "continuation_done",
+   "steps_sp1": 7,
+   "T_remaining_s": 0.79
+  },
+  {
+   "t": 8.8409,
+   "ev": "result",
+   "verdict": "PASS",
+   "cont_vs_sp1": {
+    "exact": true,
+    "max_abs": 0.0,
+    "rel_l2": 0.0
+   },
+   "cont_vs_sp2": {
+    "exact": true,
+    "max_abs": 0.0,
+    "rel_l2": 0.0
+   },
+   "control": {
+    "exact": true,
+    "max_abs": 0.0,
+    "rel_l2": 0.0
+   },
+   "T_detect": 2.0003324300050735,
+   "T_abort": 0.615720123052597,
+   "T_first_sp1_step": 0.12436424940824509,
+   "sp1_step": 0.147347548045218,
+   "sp2_step": 0.1653832970187068
+  }
+ ],
+ "cfg": {
+  "tokens": 8192,
+  "hidden": 3072,
+  "heads": 24,
+  "layers": 8
+ },
+ "steps": 12,
+ "fail_step": 5,
+ "rank": 0,
+ "sp1_step_s": 0.147347548045218,
+ "sp2_step_s": 0.1653832970187068,
+ "control_sp2_vs_sp1": {
+  "exact": true,
+  "max_abs": 0.0,
+  "rel_l2": 0.0
+ },
+ "T_abort_s": 0.615720123052597,
+ "T_detect_s": 2.0003324300050735,
+ "T_first_sp1_step_s": 0.12436424940824509,
+ "T_remaining_s": 0.7904272489249706,
+ "steps_completed_sp1": 7,
+ "cont_vs_sp1_ref": {
+  "exact": true,
+  "max_abs": 0.0,
+  "rel_l2": 0.0
+ },
+ "cont_vs_sp2_ref": {
+  "exact": true,
+  "max_abs": 0.0,
+  "rel_l2": 0.0
+ },
+ "verdict": "PASS",
+ "exit": "normal"
+}

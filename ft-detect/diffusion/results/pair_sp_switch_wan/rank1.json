@@ -1,0 +1,28 @@
+{
+ "log": [
+  {
+   "t": 0.4494,
+   "ev": "init",
+   "rank": 1,
+   "cfg": {
+    "tokens": 8192,
+    "hidden": 3072,
+    "heads": 24,
+    "layers": 8
+   },
+   "steps": 12,
+   "fail_step": 5
+  },
+  {
+   "t": 4.5201,
+   "ev": "reference_sp2_done",
+   "step_s": 0.1653
+  },
+  {
+   "t": 5.2944,
+   "ev": "rank1.sigstop_self",
+   "step": 5
+  }
+ ],
+ "exit": "stopped"
+}

@@ -1,0 +1,31 @@
+{
+ "shape": "zimage",
+ "cfg": {
+  "tokens": 4096,
+  "hidden": 3840,
+  "heads": 30,
+  "layers": 30
+ },
+ "rank": 0,
+ "modes": {
+  "baseline": {
+   "step_wall_s_median": 0.1926975306123495,
+   "step_wall_s_min": 0.19256670773029327,
+   "gpu_compute_s_median": 0.12255273643136025,
+   "stream_in_collective_s_median": 0.0700883039534092,
+   "cpu_poll_wait_s_median": 0.0,
+   "a2a_per_step": 60
+  },
+  "contained": {
+   "step_wall_s_median": 0.19672623462975025,
+   "step_wall_s_min": 0.19639847427606583,
+   "gpu_compute_s_median": 0.12555723091959953,
+   "stream_in_collective_s_median": 0.0711820483505726,
+   "cpu_poll_wait_s_median": 0.18227844685316086,
+   "a2a_per_step": 60
+  }
+ },
+ "overhead_O": 0.0209068793180609,
+ "overhead_O_min": 0.019898385296898136,
+ "verdict": "PASS (<=3%)"
+}
