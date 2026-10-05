@@ -16,6 +16,8 @@
 #                     lower it (e.g. 900) for the remaining runs if the answer is deterministic.
 #   POST_GRACE        default 300
 #   INJECT_JITTER     default 0
+#   FT_EXTERNAL_BENCH=1  after detection, run gpu_bench.py in a separate process on rank 0's GPU
+#                     (B2 feasibility: is the GPU usable from another process during the hang?)
 #   FT_ABORT_PROBE=1  Phase 3c: each rank aborts its torch process groups after FT_ABORT_DEADLINE_S
 #                     (default 10) seconds without progress; containment.py writes the timeline.
 #                     Use with MAX_DETECT_WAIT=120 POST_GRACE=60; TORCH_NCCL_ASYNC_ERROR_HANDLING=0 is
@@ -84,6 +86,12 @@ for i in $(seq 1 "$N"); do
     sleep 2
   done
   [ "$detected" = 1 ] || { echo "[run_case_diff] NO engine-side detection within ${MAX_DETECT_WAIT}s"; touch "$RUN/no_engine_detect"; }
+  if [ "${FT_EXTERNAL_BENCH:-0}" = "1" ]; then
+    # B2 feasibility: benchmark the surviving rank's GPU from a separate process during the hang
+    GPU0=$(echo "$CUDA_VISIBLE_DEVICES" | cut -d, -f1)
+    echo "[run_case_diff] external GPU bench on device $GPU0 during the hang"
+    CUDA_VISIBLE_DEVICES="$GPU0" "$PYTHON" "$HERE/gpu_bench.py" --out "$RUN/external_bench_during_hang.json" | cut -c1-300
+  fi
 
   SERVER_PID=$("$PYTHON" -c "import json;print(json.load(open('$RUN/pids.json'))['http_server'])" 2>/dev/null || echo 0)
   t1=$(date +%s); torn=0

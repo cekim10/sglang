@@ -194,3 +194,16 @@ timings mean the GPU, weights and trajectory remain usable for an in-process SP=
 FT_ABORT_PROBE=1 FT_ABORT_MODE=coexist FT_ABORT_DEADLINE_S=10 MIN_WARMUP=100 STEADY_WAIT=60 MAX_DETECT_WAIT=60 POST_GRACE=30 ./run_case_diff.sh B 1 1
 python containment.py --events runs/diff_B_r1_1_$(date +%Y%m%d)-* | grep -E "baseline|during hang|deadline_miss"
 ```
+
+## B2 feasibility: the GPU from another process during the hang
+
+B3-1 showed the stuck rank's whole CUDA context stops launching kernels (the issuing thread
+blocks in an ordinary cuBLAS launch behind the stuck all-to-all; a side stream cannot launch
+even an in-place memset). `gpu_bench.py` answers the next question: can a *separate* process use
+that GPU at normal speed while the poisoned one sits there?
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python gpu_bench.py --out results/gpu_bench_idle.json          # no hang, reference
+FT_EXTERNAL_BENCH=1 FT_ABORT_PROBE=1 FT_ABORT_MODE=coexist FT_ABORT_DEADLINE_S=10 MIN_WARMUP=100 STEADY_WAIT=60 MAX_DETECT_WAIT=60 POST_GRACE=60 ./run_case_diff.sh B 1 1
+cat runs/diff_B_r1_1_*/external_bench_during_hang.json | python -c "import json,sys; d=json.load(sys.stdin); print(d['cuda_init_ms'], [r['matmul_ms'] for r in d['runs']], d['runs'][0]['free_MiB'])"
+```
