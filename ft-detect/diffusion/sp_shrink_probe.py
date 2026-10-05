@@ -288,6 +288,8 @@ def main():
             os.kill(int(pid), signal.SIGCONT); os.kill(int(pid), signal.SIGKILL); log("fenced", pid=int(pid))
         except ProcessLookupError:
             pass
+    # rank 0 hosts the store: nobody leaves before every survivor is done with it
+    dist.barrier(group=cpu3)
     dump("normal")
     os._exit(0)
 
