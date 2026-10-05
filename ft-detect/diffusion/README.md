@@ -312,3 +312,17 @@ before the failure. Containment therefore needs every component the survivor run
 weight-replicated (Ulysses SP for the DiT, `--encoder-parallel replicate|dp` for encoders);
 `run_contain.sh` now launches with `ENCODER_PARALLEL=replicate` and the failover logs any
 weight-sharded component it finds.
+
+### Test 3 run 3 finding: activation-parallel VAE decode cached its degree
+
+With the encoder replicated, the final latents of every request were identical: the SP=2 reference,
+the contained request, the next request and the SP=1 reference (the old 0.09 control came from the
+folded encoder). But the contained and next requests returned a different video file (~30% smaller).
+The Wan VAE builds spatial-parallel decoder modules when the decode group has two ranks and caches
+`world_size`/`rank` in them, so after the shrink it decoded only rank 0's half of the latent height
+and the gather short-circuited. The failover now resets every module's cached `world_size`/`rank`/
+`sp_size`, turns on the convs' built-in "spatial parallel decode disabled" mode, and clears the
+caches keyed on group identity or shape. The report now checks the decoded videos too (frames x
+height x width and mean abs pixel difference against the SP=1 reference, needs imageio).
+Two classes of state therefore exist: weight-sharded components cannot shrink in place (replicate
+them), while activation-parallel components can, if every cached degree is found and reset.

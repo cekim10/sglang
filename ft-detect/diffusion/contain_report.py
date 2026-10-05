@@ -46,6 +46,29 @@ def _rel_err(a_path: Path, b_path: Path):
         return f"n/a ({type(e).__name__})"
 
 
+def _video(path: Path):
+    try:
+        import imageio.v3 as iio
+        import numpy as np
+
+        return np.asarray(iio.imread(path, index=None, extension=".mp4"))
+    except Exception:
+        return None
+
+
+def _video_cmp(a_path: Path, b_path: Path):
+    """frames x height x width of a, and mean abs pixel difference to b (0-255) when shapes match."""
+    import numpy as np
+
+    a, b = _video(a_path), _video(b_path)
+    if a is None or b is None:
+        return None, None
+    shape = "x".join(str(x) for x in a.shape[:3])
+    if a.shape != b.shape:
+        return shape, f"shape {a.shape[:3]} vs {b.shape[:3]}"
+    return shape, float(np.abs(a.astype(np.int16) - b.astype(np.int16)).mean())
+
+
 def analyze(run: Path, sp1ref: Path | None) -> dict:
     env = _load(run / "contain_env.json")
     r0 = read_jsonl(run / "logs" / "steps_rank0.jsonl")
@@ -111,6 +134,17 @@ def analyze(run: Path, sp1ref: Path | None) -> dict:
         row["fail_hash_eq_ref"] = hashes["fail"] == hashes["ref"] if hashes["fail"] else None
         row["after_hash_eq_ref"] = hashes["after"] == hashes["ref"] if hashes["after"] else None
     row["encoder_parallel"] = env.get("encoder_parallel", "auto (pre-2026-10-05 runs)")
+    out = run / "outputs"
+    s1v = sp1ref / "outputs" / "ref.bin" if sp1ref is not None else None
+    for ph in ("ref", "fail", "after"):
+        if (out / f"{ph}.bin").exists() and s1v is not None and s1v.exists():
+            shape, diff = _video_cmp(out / f"{ph}.bin", s1v)
+            row[f"{ph}_video_fhw"] = shape; row[f"{ph}_video_mad_vs_sp1ref"] = diff
+    if s1v is not None and s1v.exists():
+        row["sp1ref_video_fhw"], _ = _video_cmp(s1v, s1v)
+    if sp1ref is not None:
+        row["sp1ref_hash"] = (_load(sp1ref / "resp_ref.json").get("sha256") or "")[:12]
+    row["after_hash_eq_sp1ref"] = (hashes["after"] or "")[:12] == row.get("sp1ref_hash") if hashes["after"] and sp1ref is not None else None
     if fo:
         row["sharded_components"] = ",".join(fo.get("sharded_components") or []) if fo.get("sharded_components") is not None else None
     if sp1ref is not None:
@@ -152,7 +186,9 @@ def main():
                      "sp2_step_ms_median", "sp1_step_ms_median", "ref_latency_s", "fail_latency_s", "T_added_s", "after_latency_s", "sp1ref_latency_s"]
     cols_output = ["run", "encoder_parallel", "sharded_components", "injected", "rank1_after_fail", "fail_ok", "after_ok",
                    "fail_hash_eq_ref", "after_hash_eq_ref", "relerr_vs_sp2ref", "relerr_vs_sp1ref", "control_sp1_vs_sp2",
-                   "after_vs_sp2ref", "after_vs_fail", "after_vs_sp1ref",
+                   "after_vs_sp2ref", "after_vs_fail", "after_vs_sp1ref", "after_hash_eq_sp1ref",
+                   "sp1ref_video_fhw", "ref_video_fhw", "fail_video_fhw", "after_video_fhw",
+                   "ref_video_mad_vs_sp1ref", "fail_video_mad_vs_sp1ref", "after_video_mad_vs_sp1ref",
                    "coordinators_shrunk", "peers_killed", "modules_sp_size_reset", "errors", "fail_error", "after_error"]
     out = ["# Test 3: in-process failure containment (SGLang Diffusion, Wan SP=2 -> SP=1)", "",
            "Timeline (s): T_detect = rank-1 freeze -> deadline miss on rank 0; T_switch = miss -> failed over "
@@ -168,7 +204,9 @@ def main():
             "kill -> cold restart of the rank is ~37 s to ready (startup_decomp.md) plus the lost request.",
             "Verdict rule: PASS if the failing request completes with relerr_vs_sp1ref within the control "
             "(SP=1 vs SP=2 references) and the next request is served by the same process at SP=1 with "
-            "after_vs_sp1ref also within the control (a fast but wrong next request is a FAIL).", ""]
+            "after_vs_sp1ref also within the control (a fast but wrong next request is a FAIL). The decoded "
+            "videos must also match: same frames x height x width as the SP=1 reference, and a mean abs "
+            "pixel difference (0-255) no larger than the SP=2 reference's own.", ""]
     txt = "\n".join(out)
     if a.md:
         Path(a.md).parent.mkdir(parents=True, exist_ok=True); Path(a.md).write_text(txt)

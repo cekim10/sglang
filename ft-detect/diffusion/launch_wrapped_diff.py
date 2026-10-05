@@ -328,15 +328,78 @@ def _fence_peers(rank: int) -> list:
 
 
 def _sharded_components(server_args) -> list:
-    """Components whose weights are split across ranks: they cannot shrink to one rank in place."""
+    """Loaded components whose weights are split across ranks: they cannot shrink to one rank in place."""
+    import gc
+
     out = []
-    pc = server_args.pipeline_config
-    for i, cfg in enumerate(list(pc.text_encoder_configs) + [pc.image_encoder_config]):
-        mode = getattr(cfg, "parallel_folding_mode", None) if cfg is not None else None
-        if mode is not None:
-            out.append(f"encoder[{i}]:fold={mode}")
+    import torch
+
+    for obj in gc.get_objects():
+        if not isinstance(obj, torch.nn.Module):
+            continue
+        grp = obj.__dict__.get("_encoder_tp_group")
+        if grp is not None and getattr(grp, "world_size", 1) > 1:
+            out.append(f"{type(obj).__name__}:fold={grp.world_size}")
     if server_args.tp_size > 1:
         out.append(f"dit:tp={server_args.tp_size}")
+    return sorted(set(out))
+
+
+def _reset_cached_parallel_state() -> dict:
+    """Modules and caches that captured the parallel degree at construction or first use.
+
+    Wan's DiT caches sp_size; its VAE decoder, attention blocks and spatial-parallel convs cache the
+    decode world size and rank and split the latent height by them, so after the shrink they would
+    decode only this rank's half. Activation-parallel state like this is recoverable in place.
+    """
+    import gc
+    import sys as _sys
+
+    import torch
+
+    out = {"world_size_reset": 0, "sp_size_reset": 0, "classes": set(), "caches_cleared": []}
+    for obj in gc.get_objects():
+        if not isinstance(obj, torch.nn.Module):
+            continue
+        d = obj.__dict__
+        ws = d.get("world_size")
+        if type(ws) is int and ws > 1:
+            obj.world_size = 1
+            if type(d.get("rank")) is int:
+                obj.rank = 0
+            out["world_size_reset"] += 1; out["classes"].add(type(obj).__name__)
+        sp = d.get("sp_size")
+        if type(sp) is int and sp > 1:
+            obj.sp_size = 1; out["sp_size_reset"] += 1; out["classes"].add(type(obj).__name__)
+    # spatial-parallel convs fall back to a plain padded conv when this context var is set
+    try:
+        from sglang.multimodal_gen.runtime.layers import parallel_conv as pconv
+
+        pconv._SPATIAL_PARALLEL_DECODE_DISABLED.set(True)
+        for mod in list(_sys.modules.values()):
+            if mod is not None and mod.__name__.startswith("sglang.multimodal_gen") and callable(getattr(mod, "spatial_parallel_decode_disabled", None)):
+                mod.spatial_parallel_decode_disabled = lambda: True
+        out["spatial_parallel_decode"] = "disabled"
+    except Exception as e:
+        out["spatial_parallel_decode"] = f"error {type(e).__name__}"
+    # lru caches keyed on shape or group identity, not on the degree they were computed under
+    for modname, attr in (("sglang.multimodal_gen.runtime.models.vaes.common", "_cached_decode_parallel_world_size"),):
+        try:
+            getattr(_sys.modules[modname], attr).cache_clear(); out["caches_cleared"].append(attr)
+        except Exception:
+            pass
+    try:
+        from sglang.multimodal_gen.runtime.layers.rotary_embedding import mrope
+
+        for cls in vars(mrope).values():
+            if isinstance(cls, type):
+                for name in ("_forward_cached_from_grid", "_forward_cached"):
+                    fn = cls.__dict__.get(name)
+                    if fn is not None and hasattr(fn, "cache_clear"):
+                        fn.cache_clear(); out["caches_cleared"].append(f"{cls.__name__}.{name}")
+    except Exception:
+        pass
+    out["classes"] = sorted(out["classes"])
     return out
 
 
@@ -402,16 +465,11 @@ def _failover_to_sp1(steps, stage, batch, rank: int, stuck_group=None, server_ar
                     setattr(obj, attr, val)
             shrunk.append(name)
     tl["coordinators_shrunk"] = shrunk
-    # the DiT cached the SP degree at construction (WanModel.sp_size) and shards internally
-    # iff forward_batch.enable_sequence_shard and sp_size > 1; this request runs unsharded now
-    n_mod = 0
-    for m in (getattr(stage, "transformer", None), getattr(stage, "transformer_2", None)):
-        if m is None:
-            continue
-        for sub in m.modules():
-            if hasattr(sub, "sp_size") and isinstance(sub.sp_size, int):
-                sub.sp_size = 1; n_mod += 1
-    tl["modules_sp_size_reset"] = n_mod
+    reset = _reset_cached_parallel_state()
+    tl["modules_sp_size_reset"] = reset["sp_size_reset"]; tl["modules_world_size_reset"] = reset["world_size_reset"]
+    tl["reset_classes"] = reset["classes"]; tl["caches_cleared"] = reset["caches_cleared"]
+    tl["spatial_parallel_decode"] = reset.get("spatial_parallel_decode")
+    mark(f"reset cached parallel state: {reset['world_size_reset']} world_size, {reset['sp_size_reset']} sp_size in {reset['classes']}")
     try:
         batch.enable_sequence_shard = False
     except Exception as e:
