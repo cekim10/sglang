@@ -11,6 +11,13 @@
 #include <stdlib.h>
 #include <sys/socket.h>
 
+#ifndef SOCK_NONBLOCK
+#define SOCK_NONBLOCK 0
+#endif
+#ifndef SOCK_CLOEXEC
+#define SOCK_CLOEXEC 0
+#endif
+
 static int (*real_socket)(int, int, int);
 
 int socket(int domain, int type, int protocol) {
