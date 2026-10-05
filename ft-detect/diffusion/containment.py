@@ -122,10 +122,10 @@ def print_events(run: Path, window_s: float = 200.0) -> None:
             if r.get("ev") in ("req_start", "req_end", "step_exception", "abort_probe", "inventory_error") \
                     and t - 5 * NS < r["t_ns"] < t + window_s * NS:
                 print(f"  {p.stem[-5:]} {(r['t_ns'] - t) / NS:+9.3f}s {r['ev']:15s} {r.get('phase', '') or ''} {(r.get('error') or '')[:110]}")
-    rx = re.compile(r"Error executing|DistBackendError|Watchdog caught|terminate|NONBLOCKING|nonblocking|Timeout\(ms\)|FT_ABORT_PROBE|Abort|abort")
+    rx = re.compile(r"Error executing|DistBackendError|Watchdog caught|terminate|NONBLOCKING|nonblocking|Timeout\(ms\)|FT_ABORT_PROBE|Abort|abort|coexist")
     for p in sorted(run.glob("logs/rank*.log")):
         hits = [l.rstrip()[:200] for l in open(p, errors="replace") if rx.search(l) and not l.startswith("frame #")]
-        for l in hits[-8:]:
+        for l in hits[-16:]:
             print(f"  {p.name}: {l}")
     for r in read_jsonl(run / "probe.jsonl"):
         if r.get("ev") == "pid" and r.get("state") != "alive" and r["t_ns"] >= t - 5 * NS:

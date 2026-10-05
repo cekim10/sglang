@@ -69,39 +69,49 @@ def _progress_touch():
     _PROGRESS["last_ns"] = now_ns()
 
 
-def _side_stream_bench(n_iter: int = 30, size: int = 4096) -> dict:
-    """bf16 matmul + elementwise on a fresh CUDA stream, synchronised with stream events only
-    (a device-wide synchronize would wait on the stuck NCCL kernel too)."""
+_COEXIST = {"bufs": None, "stream": None}
+
+
+def _side_stream_bench(n_iter: int = 30, size: int = 4096, log=None, reuse: bool = True) -> dict:
+    """bf16 matmul + elementwise on a side CUDA stream, synchronised with stream events only
+    (a device-wide synchronize would wait on the stuck NCCL kernel too). Every blocking call is
+    announced through `log` first, so a hang can be attributed to allocation, launch or sync.
+    With reuse=True the buffers and the stream come from the baseline run (no cudaMalloc /
+    cudaHostAlloc during the hang)."""
     import torch
 
     if not torch.cuda.is_available():
         return {"error": "no cuda"}
+    say = log or (lambda m: None)
     dev = torch.device("cuda", torch.cuda.current_device())
-    stream = torch.cuda.Stream(device=dev)
     out = {}
+    tw = time.perf_counter
+    if reuse and _COEXIST["bufs"] is not None:
+        stream = _COEXIST["stream"]; a, b, d, h = _COEXIST["bufs"]; out["buffers"] = "reused"
+    else:
+        say("coexist: creating stream"); stream = torch.cuda.Stream(device=dev)
+        with torch.cuda.stream(stream):
+            say("coexist: cudaMalloc a,b"); t = tw(); a = torch.randn(size, size, device=dev, dtype=torch.bfloat16); b = torch.randn(size, size, device=dev, dtype=torch.bfloat16)
+            out["alloc_ab_ms"] = (tw() - t) * 1e3
+            say("coexist: cudaMalloc d (256 MiB)"); t = tw(); d = torch.empty(256 * 1024 * 1024 // 2, device=dev, dtype=torch.bfloat16); out["alloc_256MiB_ms"] = (tw() - t) * 1e3
+            say("coexist: cudaHostAlloc h (64 MiB pinned)"); t = tw(); h = torch.empty(64 * 1024 * 1024 // 2, dtype=torch.bfloat16, pin_memory=True); out["pin_64MiB_ms"] = (tw() - t) * 1e3
+        _COEXIST.update({"bufs": (a, b, d, h), "stream": stream}); out["buffers"] = "allocated"
     with torch.cuda.stream(stream):
-        a = torch.randn(size, size, device=dev, dtype=torch.bfloat16)
-        b = torch.randn(size, size, device=dev, dtype=torch.bfloat16)
-        # warm
-        c = a @ b
         e0 = torch.cuda.Event(enable_timing=True); e1 = torch.cuda.Event(enable_timing=True)
+        say("coexist: launching matmuls"); t = tw()
         e0.record(stream)
         for _ in range(n_iter):
             c = a @ b
             c = torch.nn.functional.silu(c)
         e1.record(stream)
-        t_wall0 = time.perf_counter()
-        e1.synchronize()
+        out["launch_ms"] = (tw() - t) * 1e3
+        say("coexist: event sync (matmul)"); t = tw(); e1.synchronize(); out["sync_wait_ms"] = (tw() - t) * 1e3
         out["matmul_ms"] = e0.elapsed_time(e1) / n_iter
-        out["sync_wait_ms"] = (time.perf_counter() - t_wall0) * 1e3
         e2 = torch.cuda.Event(enable_timing=True); e3 = torch.cuda.Event(enable_timing=True)
-        e2.record(stream); d = torch.empty(256 * 1024 * 1024 // 2, device=dev, dtype=torch.bfloat16); d.zero_(); e3.record(stream); e3.synchronize()
-        out["alloc_256MiB_ms"] = e2.elapsed_time(e3)
-        h = torch.empty(64 * 1024 * 1024 // 2, dtype=torch.bfloat16, pin_memory=True)
+        say("coexist: memset 256 MiB"); e2.record(stream); d.zero_(); e3.record(stream); e3.synchronize(); out["memset_256MiB_ms"] = e2.elapsed_time(e3)
         e4 = torch.cuda.Event(enable_timing=True); e5 = torch.cuda.Event(enable_timing=True)
-        e4.record(stream); h.copy_(d[: h.numel()], non_blocking=True); e5.record(stream); e5.synchronize()
-        out["d2h_64MiB_ms"] = e4.elapsed_time(e5)
-        del a, b, c, d, h
+        say("coexist: d2h 64 MiB"); e4.record(stream); h.copy_(d[: h.numel()], non_blocking=True); e5.record(stream); e5.synchronize(); out["d2h_64MiB_ms"] = e4.elapsed_time(e5)
+        say("coexist: done")
     out["mem_alloc_MiB"] = torch.cuda.memory_allocated() / 2**20
     return out
 
@@ -121,8 +131,10 @@ def _abort_all_groups(log) -> dict:
         # B3-1: do NOT touch the communicator; measure whether this process's GPU still executes
         # independent work at normal speed while the main thread is stuck in the collective.
         res = []
-        for i in range(3):
-            res.append(_side_stream_bench())
+        for i, reuse in enumerate((True, True, False)):   # reused buffers first, then a fresh allocation
+            log(f"[ft-detect] coexist run {i} reuse={reuse}")
+            res.append(_side_stream_bench(log=lambda m: log(f"[ft-detect] {m}"), reuse=reuse))
+            log(f"[ft-detect] coexist run {i} result {res[-1]}")
             time.sleep(1.0)
         out["attempts"].append({"group": "coexist", "how": "side-stream matmul while stuck", "ok": True,
                                 "bench_during_hang": res, "t0_ns": now_ns(), "t_ns": now_ns()})
@@ -180,7 +192,7 @@ def _abort_probe_thread(steps: "JsonlWriter", rank: int) -> None:
             if os.environ.get("FT_ABORT_MODE", "all") == "exit":
                 steps.write({"ev": "abort_probe", "phase": "abort_returned", "t_ns": now_ns(),
                              "result": {"attempts": [{"group": "exit", "how": "os._exit(3)", "ok": True}]}, "cuda_mem_alloc": mem0})
-            res = _abort_all_groups(print)
+            res = _abort_all_groups(lambda m: print(m, flush=True))
             t_ret = now_ns()
             print(f"[ft-detect] FT_ABORT_PROBE abort returned after {(t_ret - t_miss) / 1e6:.1f} ms: {res}", flush=True)
             steps.write({"ev": "abort_probe", "phase": "abort_returned", "t_ns": t_ret, "result": res,
@@ -603,7 +615,7 @@ def run_scheduler_process_wrapped(local_rank, rank, master_port, server_args, *a
             def _baseline(w):
                 time.sleep(float(os.environ.get("FT_COEXIST_BASELINE_DELAY_S", "90")))  # after model load/warmup
                 try:
-                    w.write({"ev": "coexist_baseline", "bench": [_side_stream_bench() for _ in range(3)]})
+                    w.write({"ev": "coexist_baseline", "bench": [_side_stream_bench(reuse=(i > 0)) for i in range(3)]})
                 except Exception as e:
                     w.write({"ev": "coexist_baseline", "error": repr(e)})
             _threading.Thread(target=_baseline, args=(JsonlWriter(logs_dir() / f"steps_rank{rank}.jsonl"),), daemon=True).start()
