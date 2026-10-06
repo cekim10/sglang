@@ -28,11 +28,20 @@ for i in $(seq 1 "$N"); do
   echo "=============== [worker] run $i/$N node $NODE_RANK -> $RUN"
   "$HERE/launch_diff.sh" || { echo "[worker] launch failed"; "$PYTHON" "$ROOT/stop.py" || true; continue; }
   MAIN=$("$PYTHON" -c "import json;print(json.load(open('$RUN/pids.json'))['http_server'])")
-  seen=0
+  # node 0 may open and close the rendezvous port while it starts; only a store that stays closed
+  # for CLOSED_S after having been up means node 0 finished its run
+  seen=0; closed_since=""
   while kill -0 "$MAIN" 2>/dev/null; do
-    if port_open; then seen=1; elif [ "$seen" = 1 ]; then echo "[worker] node 0 store closed: run finished"; break; fi
+    if port_open; then
+      [ "$seen" = 0 ] && echo "[worker] node 0 store is up"
+      seen=1; closed_since=""
+    elif [ "$seen" = 1 ]; then
+      [ -z "$closed_since" ] && { closed_since=$(date +%s); echo "[worker] node 0 store not answering; waiting ${CLOSED_S:-60}s"; }
+      if [ $(( $(date +%s) - closed_since )) -ge "${CLOSED_S:-60}" ]; then echo "[worker] node 0 store closed for ${CLOSED_S:-60}s: run finished"; break; fi
+    fi
     sleep 2
   done
+  kill -0 "$MAIN" 2>/dev/null || echo "[worker] local launcher exited on its own"
   grep -h "FT_CONTAIN\|FT_FAIL" "$RUN"/logs/rank*.log | cut -c1-300
   "$PYTHON" "$ROOT/stop.py" || true
   sleep 5
