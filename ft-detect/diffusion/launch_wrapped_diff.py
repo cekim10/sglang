@@ -1139,11 +1139,31 @@ def _pids_writer(num_gpus: int, nnodes: int = 1, node_rank: int = 0) -> None:
         time.sleep(1)
 
 
+def _patch_local_gpu_memory_probe() -> None:
+    """Multi-node: SGLang 0.5.19's auto-tuner probes device ids base_gpu_id..base_gpu_id+num_gpus,
+    but num_gpus counts every node, so a 2-GPU node asks for devices 2 and 3 and fails at startup.
+    Probe this node's GPUs only; single-node behaviour is unchanged.
+    """
+    from sglang.multimodal_gen.runtime.platforms import current_platform
+    from sglang.multimodal_gen.runtime.server_args import auto_tune
+
+    def local_min_available_gb(self):
+        args = self.server_args
+        if current_platform.is_cpu():
+            return None
+        local = max(1, args.num_gpus // max(1, args.nnodes))
+        return min(current_platform.get_available_gpu_memory(device_id=d, empty_cache=False)
+                   for d in range(args.base_gpu_id, args.base_gpu_id + local))
+
+    auto_tune.ServerArgsAutoTuner._get_min_available_device_memory_gb = local_min_available_gb
+
+
 def main() -> None:
     import sglang.multimodal_gen.runtime.launch_server as ls
     from sglang.multimodal_gen.runtime.server_args.server_args import prepare_server_args
 
     ensure_run_dirs()
+    _patch_local_gpu_memory_probe()
     server_args = prepare_server_args(sys.argv[1:])
     num_gpus = int(getattr(server_args, "num_gpus", 1))
     with open(run_dir() / "launch.json", "w") as f:
