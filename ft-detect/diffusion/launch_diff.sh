@@ -13,6 +13,10 @@
 #   RPC_TIMEOUT           s; empty = stock default (None = no timeout)   (-> --scheduler-rpc-timeout)
 #   EXTRA_ARGS            extra CLI flags verbatim
 #   READY_TIMEOUT         default 2400 (model load + warmup)
+#   NNODES / NODE_RANK / DIST_INIT_ADDR   multi-node (-> --nnodes --node-rank --dist-init-addr host:port);
+#                         NGPU is the total over all nodes. Node 0 serves HTTP and is waited on via
+#                         /health; other nodes only host workers, so this script returns once their
+#                         rank PID files exist and leaves them running (stop them with stop.py).
 #   PYTHON                default python
 # Host quirks are NOT set here; export them yourself (elves-01 needs NCCL_P2P_DISABLE=1).
 set -euo pipefail
@@ -33,7 +37,8 @@ fi
 mkdir -p "$RUN_DIR/logs" "$RUN_DIR/pids"
 # A server from a previous run still answering on this port would silently serve this run's
 # load while the new ranks sit idle; refuse instead.
-if curl -s -o /dev/null --max-time 3 "http://127.0.0.1:$PORT/health" || curl -s -o /dev/null --max-time 3 "http://127.0.0.1:$PORT/liveness"; then
+NNODES=${NNODES:-1}; NODE_RANK=${NODE_RANK:-0}
+if [ "$NODE_RANK" = 0 ] && { curl -s -o /dev/null --max-time 3 "http://127.0.0.1:$PORT/health" || curl -s -o /dev/null --max-time 3 "http://127.0.0.1:$PORT/liveness"; }; then
   echo "refusing to start: something already answers on port $PORT (stale server from an earlier run?). Find it with: ps -ef | grep -E 'launch_wrapped|sglang' ; stop it via the old run dir: FT_RUN_DIR=<old run> python stop.py" >&2
   exit 3
 fi
@@ -43,6 +48,10 @@ args=(--model-path "$MODEL" --num-gpus "$NGPU" --port "$PORT" --host 127.0.0.1)
 par=($PARALLEL_ARGS)
 [ -n "${DIST_TIMEOUT:-}" ] && args+=(--dist-timeout "$DIST_TIMEOUT")
 [ -n "${RPC_TIMEOUT:-}" ] && args+=(--scheduler-rpc-timeout "$RPC_TIMEOUT")
+if [ "$NNODES" -gt 1 ]; then
+  : "${DIST_INIT_ADDR:?set DIST_INIT_ADDR=host:port of node 0 for a multi-node launch}"
+  args+=(--nnodes "$NNODES" --node-rank "$NODE_RANK" --dist-init-addr "$DIST_INIT_ADDR")
+fi
 # shellcheck disable=SC2206
 extra=(${EXTRA_ARGS:-})
 
@@ -61,6 +70,16 @@ echo "$SERVER_PID" > "$RUN_DIR/pids/server.pid"
 echo "[launch] server pid $SERVER_PID; log $RUN_DIR/logs/server.log"
 
 t0=$(date +%s)
+if [ "$NODE_RANK" != 0 ]; then
+  while [ ! -e "$RUN_DIR/pids.json" ]; do
+    if ! kill -0 "$SERVER_PID" 2>/dev/null; then echo "[launch] worker node exited during startup" >&2; tail -n 40 "$RUN_DIR/logs/server.log" >&2; exit 1; fi
+    if [ $(( $(date +%s) - t0 )) -ge "$READY_TIMEOUT" ]; then echo "[launch] timed out waiting for local ranks" >&2; exit 1; fi
+    sleep 2
+  done
+  echo "[launch] worker node $NODE_RANK: local ranks started; readiness is reported by node 0's /health"
+  cat "$RUN_DIR/pids.json"
+  exit 0
+fi
 while true; do
   if ! kill -0 "$SERVER_PID" 2>/dev/null; then
     echo "[launch] server process exited during startup; tail of log:" >&2

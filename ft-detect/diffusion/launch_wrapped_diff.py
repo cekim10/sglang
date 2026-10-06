@@ -313,13 +313,14 @@ def _bounded(fn, limit_s):
     return (True, res["s"], res.get("err")) if done.wait(limit_s) else (False, limit_s, f"hung > {limit_s:.0f} s")
 
 
-def _fence_peers(rank: int) -> list:
+def _fence_peers(rank: int, members=None) -> list:
+    """Kill this node's ranks that are not in `members` (all other ranks when members is None)."""
     import signal as _sig
 
     killed = []
     pids = json.load(open(run_dir() / "pids.json"))
     for r, pid in pids.get("ranks", {}).items():
-        if int(r) != rank:
+        if int(r) != rank and (members is None or int(r) not in members):
             try:
                 os.kill(int(pid), _sig.SIGCONT); os.kill(int(pid), _sig.SIGKILL); killed.append(int(pid))
             except ProcessLookupError:
@@ -345,7 +346,7 @@ def _sharded_components(server_args) -> list:
     return sorted(set(out))
 
 
-def _reset_cached_parallel_state() -> dict:
+def _reset_cached_parallel_state(dit_modules=(), dit_degree: int = 1, dit_rank: int = 0) -> dict:
     """Modules and caches that captured the parallel degree at construction or first use.
 
     Wan's DiT caches sp_size; its VAE decoder, attention blocks and spatial-parallel convs cache the
@@ -358,19 +359,22 @@ def _reset_cached_parallel_state() -> dict:
     import torch
 
     out = {"world_size_reset": 0, "sp_size_reset": 0, "classes": set(), "caches_cleared": []}
+    dit_ids = {id(sub) for m in dit_modules if m is not None for sub in m.modules()}
     for obj in gc.get_objects():
         if not isinstance(obj, torch.nn.Module):
             continue
+        in_dit = id(obj) in dit_ids
+        degree, new_rank = (dit_degree, dit_rank) if in_dit else (1, 0)
         d = obj.__dict__
         ws = d.get("world_size")
-        if type(ws) is int and ws > 1:
-            obj.world_size = 1
+        if type(ws) is int and ws > 1 and ws != degree:
+            obj.world_size = degree
             if type(d.get("rank")) is int:
-                obj.rank = 0
+                obj.rank = new_rank
             out["world_size_reset"] += 1; out["classes"].add(type(obj).__name__)
         sp = d.get("sp_size")
-        if type(sp) is int and sp > 1:
-            obj.sp_size = 1; out["sp_size_reset"] += 1; out["classes"].add(type(obj).__name__)
+        if type(sp) is int and sp > 1 and sp != degree:
+            obj.sp_size = degree; out["sp_size_reset"] += 1; out["classes"].add(type(obj).__name__)
     # spatial-parallel convs fall back to a plain padded conv when this context var is set
     try:
         from sglang.multimodal_gen.runtime.layers import parallel_conv as pconv
@@ -494,6 +498,140 @@ def _failover_to_sp1(steps, stage, batch, rank: int, stuck_group=None, server_ar
     mark("reconfigured to SP=1")
     tl["cuda_mem_alloc_MiB"] = torch.cuda.memory_allocated() / 2**20 if torch.cuda.is_available() else None
     _CONTAIN["failed_over"] = True
+    return tl
+
+
+def _agree_members(rank: int, world: int, settle_s: float, epoch: int) -> list:
+    """Survivors register in the default store; global rank 0 (the store host) decides the set."""
+    from torch.distributed import distributed_c10d as c10d
+
+    store = c10d._get_default_store()
+    store.set(f"ft/shrink/e{epoch}/alive/{rank}", "1")
+    if rank == 0:
+        time.sleep(settle_s)
+        members = [r for r in range(world) if store.check([f"ft/shrink/e{epoch}/alive/{r}"])]
+        store.set(f"ft/shrink/e{epoch}/members", ",".join(map(str, members)))
+    store.wait([f"ft/shrink/e{epoch}/members"])
+    return [int(v) for v in store.get(f"ft/shrink/e{epoch}/members").decode().split(",")]
+
+
+def _survivor_groups(members):
+    """NCCL and gloo groups of the survivors only.
+
+    With a device-bound default group torch builds NCCL subgroups by splitting the default
+    communicator, which needs every rank of it including the dead one; unbind while creating.
+    """
+    import torch.distributed as dist
+    from torch.distributed import distributed_c10d as c10d
+
+    dpg = c10d._get_default_group()
+    saved = dpg.bound_device_id
+    dpg.bound_device_id = None
+    try:
+        dev_group = dist.new_group(members, backend="nccl", use_local_synchronization=True)
+        cpu_group = dist.new_group(members, backend="gloo", use_local_synchronization=True)
+    finally:
+        dpg.bound_device_id = saved
+    return dev_group, cpu_group
+
+
+def _rewire_coordinators(members, dev_group, cpu_group, dead) -> dict:
+    """Point every coordinator that contained a dead rank at the survivor groups.
+
+    The VAE decode group becomes a singleton: spatial-parallel decode is switched off after a
+    shrink, so each rank decodes on its own.
+    """
+    from sglang.multimodal_gen.runtime.distributed import parallel_state as ps
+    from sglang.multimodal_gen.runtime.distributed.device_communicators.cuda_communicator import CudaCommunicator
+    from sglang.multimodal_gen.runtime.distributed.group_coordinator import GroupCoordinator, SequenceParallelGroupCoordinator
+
+    done, out = set(), {"rewired": [], "singleton": []}
+    for name, coord in vars(ps).items():
+        if not isinstance(coord, GroupCoordinator) or id(coord) in done or not (set(coord.ranks) & dead):
+            continue
+        done.add(id(coord))
+        if name == "_VAE_DECODE":
+            coord.ranks, coord.world_size, coord.rank_in_group = [coord.rank], 1, 0
+            coord.device_communicator = None
+            out["singleton"].append(name)
+            continue
+        coord.ranks = [r for r in coord.ranks if r in members]
+        coord.world_size, coord.rank_in_group = len(coord.ranks), coord.ranks.index(coord.rank)
+        coord.device_group, coord.cpu_group = dev_group, cpu_group
+        coord.mq_broadcaster = None
+        coord.srt_custom_allreduce = None
+        coord.device_communicator = CudaCommunicator(cpu_group=cpu_group, device=coord.device, device_group=dev_group,
+                                                     unique_name=coord.unique_name)
+        if isinstance(coord, SequenceParallelGroupCoordinator):
+            if coord.ring_world_size != 1:
+                raise RuntimeError("shrink supports pure Ulysses SP only (ring degree 1)")
+            coord.ulysses_group = dev_group
+            coord.ulysses_world_size, coord.ulysses_rank = coord.world_size, coord.rank_in_group
+        out["rewired"].append(name)
+    return out
+
+
+def _rebind_cached_groups(world_cpu_group) -> dict:
+    """Objects that copied a group handle at construction, and torch's default-group barrier."""
+    import gc
+
+    import torch.distributed as dist
+
+    from sglang.multimodal_gen.runtime.distributed import parallel_state as ps
+
+    n = 0
+    for obj in gc.get_objects():
+        if type(obj).__name__ == "GPUWorker" and "sp_cpu_group" in obj.__dict__:
+            obj.sp_cpu_group = ps.get_sp_group().cpu_group; n += 1
+    orig_barrier = _CONTAIN["orig"].setdefault("barrier", dist.barrier)
+
+    def survivor_barrier(group=None, async_op=False, device_ids=None):
+        if group is None:      # the default group still contains the dead rank
+            return orig_barrier(group=world_cpu_group, async_op=async_op)
+        return orig_barrier(group=group, async_op=async_op, device_ids=device_ids)
+
+    dist.barrier = survivor_barrier
+    return {"gpu_workers_rebound": n}
+
+
+def _failover_shrink(steps, stage, batch, rank: int, stuck_group=None, server_args=None) -> dict:
+    """SP=N -> SP=N-1 on the survivors: targeted abort, membership, survivor groups, rewiring."""
+    import torch
+    from torch.distributed import distributed_c10d as c10d
+
+    from sglang.multimodal_gen.runtime.distributed import parallel_state as ps
+
+    t_start = time.perf_counter()
+
+    def mark(what):
+        print(f"[ft-detect] FT_CONTAIN shrink: {what} at +{(time.perf_counter() - t_start) * 1e3:.0f} ms", flush=True)
+
+    world = ps.get_world_group().world_size
+    _CONTAIN["epoch"] = _CONTAIN.get("epoch", 0) + 1
+    tl = {"mode": "shrink", "epoch": _CONTAIN["epoch"], "world_before": world}
+    target = stuck_group if stuck_group is not None else c10d.GroupMember.WORLD
+    ok, secs, err = _bounded(lambda: c10d._abort_process_group(target), float(os.environ.get("FT_CONTAIN_ABORT_TIMEOUT_S", "10")))
+    tl.update({"abort_finished": ok, "t_abort_s": secs, "abort_error": err}); mark(f"abort finished={ok} ({secs * 1e3:.0f} ms)")
+    t = time.perf_counter()
+    members = _agree_members(rank, world, float(os.environ.get("FT_SHRINK_SETTLE_S", "1.0")), _CONTAIN["epoch"])
+    dead = set(range(world)) - set(members)
+    tl.update({"members": members, "dead": sorted(dead), "t_membership_s": time.perf_counter() - t}); mark(f"members {members}")
+    if 0 in dead:
+        raise RuntimeError("rank 0 (store host and request ingress) failed; shrink cannot proceed")
+    tl["peers_killed"] = _fence_peers(rank, members=set(members)); mark(f"fenced {tl['peers_killed']}")
+    t = time.perf_counter()
+    dev_group, cpu_group = _survivor_groups(members)
+    tl["t_groups_s"] = time.perf_counter() - t; mark("survivor groups built")
+    t = time.perf_counter()
+    tl.update(_rewire_coordinators(set(members), dev_group, cpu_group, dead))
+    tl.update(_rebind_cached_groups(cpu_group))
+    n, r = len(members), members.index(rank)
+    reset = _reset_cached_parallel_state(dit_modules=(stage.transformer, stage.transformer_2), dit_degree=n, dit_rank=r)
+    tl.update({"sp_after": ps.get_sp_group().world_size, "reset_classes": reset["classes"],
+               "caches_cleared": reset["caches_cleared"], "spatial_parallel_decode": reset.get("spatial_parallel_decode"),
+               "t_rewire_s": time.perf_counter() - t,
+               "cuda_mem_alloc_MiB": torch.cuda.memory_allocated() / 2**20})
+    mark(f"rewired to SP={tl['sp_after']} ({tl['rewired']}, singleton {tl['singleton']})")
     return tl
 
 
@@ -823,16 +961,22 @@ def _install_step_logger(rank: int) -> None:
                 print(f"[ft-detect] FT_CONTAIN deadline miss at step {si}: {e}; failing over to SP1 in-process", flush=True)
                 steps.write({"ev": "contain", "phase": "deadline_miss", "i": si, "t0_ns": t0, "t_ns": t_fail, "error": str(e)[:200]})
                 try:
-                    tl = _failover_to_sp1(steps, self, batch, rank, stuck_group=e.group, server_args=server_args)
+                    from sglang.multimodal_gen.runtime.distributed import parallel_state as _ps
+
+                    if _ps.get_sp_group().world_size > 2 and os.environ.get("FT_CONTAIN_SHRINK", "1") == "1":
+                        tl = _failover_shrink(steps, self, batch, rank, stuck_group=e.group, server_args=server_args)
+                    else:
+                        tl = _failover_to_sp1(steps, self, batch, rank, stuck_group=e.group, server_args=server_args)
                 except BaseException as fe:
                     steps.write({"ev": "contain", "phase": "failover_error", "i": si, "t_ns": now_ns(), "error": repr(fe)[:300]})
                     raise
                 t_sw = now_ns()
                 steps.write({"ev": "contain", "phase": "failed_over", "i": si, "t_ns": t_sw, **tl})
-                print(f"[ft-detect] FT_CONTAIN failed over in {(t_sw - t_fail) / 1e6:.0f} ms (abort {tl.get('t_abort_s', 0) * 1e3:.0f} ms); re-running step {si} at SP1", flush=True)
+                print(f"[ft-detect] FT_CONTAIN failed over in {(t_sw - t_fail) / 1e6:.0f} ms (abort {tl.get('t_abort_s', 0) * 1e3:.0f} ms); "
+                      f"re-running step {si} at SP{tl.get('sp_after', 1)}", flush=True)
                 r = orig_step(self, ctx, step, batch, server_args, *a, **k)
                 steps.write({"ev": "contain", "phase": "step_recomputed", "i": si, "t0_ns": t_sw, "t_ns": now_ns()})
-                print(f"[ft-detect] FT_CONTAIN step {si} recomputed at SP1 in {(now_ns() - t_sw) / 1e6:.0f} ms", flush=True)
+                print(f"[ft-detect] FT_CONTAIN step {si} recomputed at SP{tl.get('sp_after', 1)} in {(now_ns() - t_sw) / 1e6:.0f} ms", flush=True)
             except BaseException as e:
                 steps.write({"ev": "step_exception", "i": getattr(step, "step_index", None), "t0_ns": t0,
                              "t_ns": now_ns(), "error": repr(e)[:300]})
@@ -959,20 +1103,22 @@ def run_scheduler_process_wrapped(local_rank, rank, master_port, server_args, *a
     return run_scheduler_process(local_rank, rank, master_port, server_args, *args, **kwargs)
 
 
-def _pids_writer(num_gpus: int) -> None:
+def _pids_writer(num_gpus: int, nnodes: int = 1, node_rank: int = 0) -> None:
     import psutil
 
+    local = num_gpus // nnodes
+    local_ranks = range(node_rank * local, node_rank * local + local)
     deadline = time.time() + 7200
     while time.time() < deadline:
         ranks = {}
-        for i in range(num_gpus):
+        for i in local_ranks:
             p = run_dir() / "pids" / f"rank{i}.pid"
             if p.exists():
                 try:
                     ranks[str(i)] = int(p.read_text().strip())
                 except ValueError:
                     pass
-        if len(ranks) == num_gpus:
+        if len(ranks) == local:
             me = psutil.Process(os.getpid())
             others = {}
             for c in me.children(recursive=False):
@@ -982,7 +1128,8 @@ def _pids_writer(num_gpus: int) -> None:
                     others[str(c.pid)] = c.name() + " " + " ".join(c.cmdline()[-2:])
                 except Exception:
                     others[str(c.pid)] = "?"
-            rec = {"http_server": os.getpid(), "tp_size": num_gpus, "stack": "sglang-diffusion", "ranks": ranks,
+            rec = {"http_server": os.getpid(), "tp_size": num_gpus, "nnodes": nnodes, "node_rank": node_rank,
+                   "stack": "sglang-diffusion", "ranks": ranks,
                    "detokenizer": None, "other_children": others, "t_ready_ns": now_ns(), "wall_ready": wall(),
                    "argv": sys.argv[1:]}
             with open(run_dir() / "pids.json", "w") as f:
@@ -1006,7 +1153,7 @@ def main() -> None:
     # launch_server() reads this name from its module globals when it spawns workers.
     assert hasattr(ls, "run_scheduler_process"), "launch_server module has no run_scheduler_process global; version drift"
     ls.run_scheduler_process = run_scheduler_process_wrapped
-    threading.Thread(target=_pids_writer, args=(num_gpus,), daemon=True).start()
+    threading.Thread(target=_pids_writer, args=(num_gpus, int(server_args.nnodes), int(server_args.node_rank)), daemon=True).start()
 
     try:
         if hasattr(ls, "dispatch_launch"):

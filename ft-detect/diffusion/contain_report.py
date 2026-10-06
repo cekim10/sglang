@@ -81,8 +81,16 @@ def analyze(run: Path, sp1ref: Path | None) -> dict:
            "contained": miss is not None, "failed_over": fo is not None, "recomputed": rec is not None}
     if inj and miss:
         row["T_detect_s"] = (miss["t_ns"] - inj["t_ns"]) / 1e9
+    elif miss:
+        # the failing rank's log is on another node (different clock): step start to miss on rank 0
+        row["T_detect_s"] = (miss["t_ns"] - miss["t0_ns"]) / 1e9; row["T_detect_note"] = "step start to miss"
     row["abort_mode"] = env.get("abort"); row["fence_first"] = env.get("fence_first")
     if fo:
+        row["failover_mode"] = fo.get("mode", "sp1"); row["sp_after"] = fo.get("sp_after", 1)
+        row["members"] = ",".join(map(str, fo.get("members", []))) or None
+        for k in ("t_membership_s", "t_groups_s", "t_rewire_s"):
+            row[k] = fo.get(k)
+        row["rewired"] = ",".join(fo.get("rewired", [])) or None
         row["abort_finished"] = fo.get("abort_finished"); row["abort_error"] = fo.get("abort_error")
         row["T_abort_s"] = fo.get("t_abort_s"); row["T_reconfigure_s"] = fo.get("t_reconfigure_s")
         row["coordinators_shrunk"] = ",".join(fo.get("coordinators_shrunk", [])); row["peers_killed"] = fo.get("peers_killed")
@@ -107,8 +115,9 @@ def analyze(run: Path, sp1ref: Path | None) -> dict:
     if counts:
         row["rank1_req_count"] = counts[-1].get("n")
     rs = read_jsonl(run / "rank_states.jsonl") if (run / "rank_states.jsonl").exists() else []
+    fr = str(env.get("fail_rank", 1))
     for r in rs:
-        row[f"rank1_{r['tag']}"] = r["states"].get("1")
+        row[f"rank1_{r['tag']}"] = r["states"].get(fr)
     exc = [r for r in r0 if r.get("ev") in ("step_exception",) or (r.get("ev") == "contain" and "error" in r.get("phase", ""))]
     if exc:
         row["errors"] = "; ".join(str(r.get("error"))[:120] for r in exc[:3])
@@ -182,7 +191,8 @@ def main():
         cands = sorted((HERE / "runs").glob("contain_sp1ref_*"))
         sp1 = cands[-1] if cands else None
     rows = [analyze(Path(r), sp1) for r in a.runs if Path(r).is_dir()]
-    cols_timeline = ["run", "shape", "steps", "fail_step", "deadline_s", "abort_mode", "fence_first", "abort_finished", "T_detect_s", "T_abort_s", "T_switch_s", "T_recompute_s",
+    cols_timeline = ["run", "shape", "steps", "fail_step", "deadline_s", "failover_mode", "members", "sp_after", "abort_finished",
+                     "T_detect_s", "T_abort_s", "t_membership_s", "t_groups_s", "t_rewire_s", "T_switch_s", "T_recompute_s",
                      "sp2_step_ms_median", "sp1_step_ms_median", "ref_latency_s", "fail_latency_s", "T_added_s", "after_latency_s", "sp1ref_latency_s"]
     cols_output = ["run", "encoder_parallel", "sharded_components", "injected", "rank1_after_fail", "fail_ok", "after_ok",
                    "fail_hash_eq_ref", "after_hash_eq_ref", "relerr_vs_sp2ref", "relerr_vs_sp1ref", "control_sp1_vs_sp2",
@@ -190,7 +200,7 @@ def main():
                    "sp1ref_video_fhw", "ref_video_fhw", "fail_video_fhw", "after_video_fhw",
                    "ref_video_mad_vs_sp1ref", "fail_video_mad_vs_sp1ref", "after_video_mad_vs_sp1ref",
                    "coordinators_shrunk", "peers_killed", "modules_sp_size_reset", "errors", "fail_error", "after_error"]
-    out = ["# Test 3: in-process failure containment (SGLang Diffusion, Wan SP=2 -> SP=1)", "",
+    out = ["# Test 3: in-process failure containment (SGLang Diffusion, Wan; SP=2 -> SP=1 or SP=N -> SP=N-1)", "",
            "Timeline (s): T_detect = rank-1 freeze -> deadline miss on rank 0; T_switch = miss -> failed over "
            "(abort + coordinator shrink + peer kill); T_recompute = the failed step re-run at SP=1; "
            "T_added = failing request latency minus the SP=2 reference request in the same server.", ""]

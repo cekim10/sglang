@@ -415,3 +415,17 @@ group works, continuation bit-exact against the SP=3, SP=4 and SP=1 references.
 Two machines: elves-01 and elves-03 pass only 1500-byte frames between them although both NICs are
 set to MTU 9200, so NCCL needs `LD_PRELOAD=netfix/mss_clamp.so` (unprivileged TCP MSS clamp) with
 sockets (`NCCL_IB_DISABLE=1`); cross-node all-to-all is ~24x slower than within a machine.
+
+### Test 3 on two nodes: SP=4 -> SP=3 inside SGLang Diffusion
+
+When more than two SP ranks exist, the failover shrinks instead of falling back to one rank
+(`FT_CONTAIN_SHRINK=1`, default): targeted abort of the stalled group; survivors register in the
+default store and global rank 0 publishes the membership (`FT_SHRINK_SETTLE_S`, default 1 s); each
+node fences its own dead ranks; survivor NCCL and gloo groups are built with the device unbound;
+every coordinator that contained a dead rank is pointed at them with a new CudaCommunicator (the
+SP coordinator's Ulysses fields too; pure Ulysses only), the VAE decode group becomes a singleton
+with spatial-parallel decode off, the GPU worker's cached SP CPU group and torch's default-group
+barrier are rebound, the DiT's cached `sp_size` becomes N-1, and the failed step is recomputed.
+A failure of global rank 0 (store host and request ingress) is out of scope and raises.
+`launch_diff.sh` takes `NNODES`/`NODE_RANK`/`DIST_INIT_ADDR`; `run_contain_worker.sh` runs node 1
+and relaunches its workers each time node 0's store goes away.
